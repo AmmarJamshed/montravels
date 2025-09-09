@@ -8,7 +8,7 @@ from datetime import date, timedelta
 import urllib.parse
 import requests
 import streamlit as st
-from typing import Optional, List, Set, Dict, Any
+from typing import Optional, List, Set, Dict, Any, Tuple
 
 # =========================================================
 # THEME (Pokémon-inspired Travel Guide)
@@ -16,34 +16,19 @@ from typing import Optional, List, Set, Dict, Any
 def apply_pokemon_theme():
     st.markdown("""
         <style>
-        /* App background + base font */
-        .stApp {
-            background-color: #F5F7FA;
-            font-family: 'Trebuchet MS', sans-serif;
-            color: #2C2C2C;
-        }
-
-        /* Headings */
-        h1 {
-            color: #FFCC00;                      /* Pikachu yellow */
-            text-shadow: 2px 2px 0px #3B4CCA;    /* Pokémon blue outline */
-        }
+        .stApp { background-color: #F5F7FA; font-family: 'Trebuchet MS', sans-serif; color: #2C2C2C; }
+        h1 { color: #FFCC00; text-shadow: 2px 2px 0px #3B4CCA; }
         h2, h3 { color: #3B4CCA; }
 
-        /* ===== Sidebar ===== */
-        section[data-testid="stSidebar"] {
-            background-color: #3B4CCA;
-            color: white;
-        }
-        /* Headings / labels in sidebar */
+        /* Sidebar */
+        section[data-testid="stSidebar"] { background-color: #3B4CCA; color: white; }
         section[data-testid="stSidebar"] h1,
         section[data-testid="stSidebar"] h2,
         section[data-testid="stSidebar"] h3,
         section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] span[role="img"] {
-            color: white !important;
-        }
-        /* Inputs & text inside form controls -> dark so it's readable */
+        section[data-testid="stSidebar"] span[role="img"] { color: white !important; }
+
+        /* Inputs readable */
         section[data-testid="stSidebar"] input,
         section[data-testid="stSidebar"] textarea,
         section[data-testid="stSidebar"] select,
@@ -51,80 +36,43 @@ def apply_pokemon_theme():
         section[data-testid="stSidebar"] .stNumberInput input,
         section[data-testid="stSidebar"] .stDateInput input,
         section[data-testid="stSidebar"] .stMultiSelect input {
-            color: #111 !important;
-            background-color: #F0F3FF !important;
-            border-radius: 10px !important;
+            color: #111 !important; background-color: #F0F3FF !important; border-radius: 10px !important;
         }
-        /* Multiselect chosen chips */
+        section[data-testid="stSidebar"] ::placeholder { color: #2C2C2C !important; opacity: 0.8; }
+
+        /* Multiselect chips */
         section[data-testid="stSidebar"] div[data-baseweb="tag"] {
-            background: #FFCC00 !important;
-            color: #2C2C2C !important;
-            border-radius: 10px !important;
-            font-weight: 600;
-        }
-        /* Placeholder text */
-        section[data-testid="stSidebar"] ::placeholder {
-            color: #2C2C2C !important;
-            opacity: 0.8;
+            background: #FFCC00 !important; color: #2C2C2C !important; border-radius: 10px !important; font-weight: 600;
         }
 
-        /* ===== Buttons / links ===== */
-        /* Use anchors styled like buttons (valid HTML) */
+        /* Buttons / links */
         .btn-link {
-            display: inline-block;
-            background-color: #FF1C1C;    /* Poké-ball red */
-            color: #FFFFFF !important;
-            border-radius: 12px;
-            border: 2px solid #3B4CCA;
-            font-weight: bold;
-            transition: 0.3s;
-            padding: 8px 14px;
-            text-decoration: none !important;
-            cursor: pointer;
+            display:inline-block; background:#FF1C1C; color:#fff !important; border-radius:12px;
+            border:2px solid #3B4CCA; font-weight:bold; padding:8px 14px; text-decoration:none !important;
+            transition:.3s; cursor:pointer;
         }
-        .btn-link:hover {
-            background-color: #FFCC00;
-            color: #2C2C2C !important;
-            border-color: #FF1C1C;
-        }
+        .btn-link:hover { background:#FFCC00; color:#2C2C2C !important; border-color:#FF1C1C; }
 
-        /* Streamlit native buttons */
-        div.stButton > button {
-            background-color: #FF1C1C;
-            color: white;
-            border-radius: 12px;
-            border: 2px solid #3B4CCA;
-            font-weight: bold;
-            transition: 0.3s;
-            padding: 8px 14px;
+        div.stButton>button {
+            background:#FF1C1C; color:#fff; border-radius:12px; border:2px solid #3B4CCA; font-weight:bold; padding:8px 14px;
+            transition:.3s;
         }
-        div.stButton > button:hover {
-            background-color: #FFCC00;
-            color: #2C2C2C;
-            border: 2px solid #FF1C1C;
-        }
+        div.stButton>button:hover { background:#FFCC00; color:#2C2C2C; border:2px solid #FF1C1C; }
 
-        /* Card-ish container */
+        /* Card */
         .pokecard {
-            background-color: #FFFFFF;
-            border-radius: 16px;
-            padding: 12px;
-            margin-bottom: 12px;
-            border: 2px solid #FFCC00;
-            box-shadow: 2px 2px 6px rgba(0,0,0,0.1);
+            background:#fff; border-radius:16px; padding:12px; margin-bottom:12px; border:2px solid #FFCC00;
+            box-shadow:2px 2px 6px rgba(0,0,0,0.1);
         }
 
-        /* Links in body */
-        a { color: #3B4CCA; font-weight: bold; text-decoration: none; }
-        a:hover { color: #FF1C1C; }
-
-        /* Captions / notes */
-        .stCaption, span[data-baseweb="tag"] { color: #4CAF50 !important; }
+        a { color:#3B4CCA; font-weight:bold; text-decoration:none; }
+        a:hover { color:#FF1C1C; }
+        .stCaption, span[data-baseweb="tag"] { color:#4CAF50 !important; }
         </style>
     """, unsafe_allow_html=True)
 
 # =========================================================
-# Utilities
+# Helpers
 # =========================================================
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
@@ -134,51 +82,60 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = math.sin(dphi/2)**2 + math.cos(p1) * math.cos(p2) * math.sin(dl/2)**2
     return 2 * R * math.asin(math.sqrt(a))
 
-def combined_query(city: str, area: Optional[str]) -> str:
-    return (f"{city} {area}".strip() if area else city).strip()
-
 def _cachebuster(seed: str) -> str:
     raw = f"{seed}-{time.time_ns()}"
     return hashlib.md5(raw.encode()).hexdigest()[:10]
 
-def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adults: int = 2) -> str:
-    q = urllib.parse.quote(city_or_area)
-    return (
-        "https://www.booking.com/searchresults.html"
-        f"?ss={q}"
-        f"&checkin={checkin:%Y-%m-%d}"
-        f"&checkout={checkout:%Y-%m-%d}"
-        f"&group_adults={adults}&no_rooms=1&group_children=0"
-        f"&lang=en-us&src=index&sb=1&nflt="
-        f"&_mtu={_cachebuster(city_or_area)}"
-    )
+def parse_city_country(display_name: str) -> Tuple[str, Optional[str]]:
+    """
+    Very light parser: Booking understands 'City, Country' reliably.
+    display_name is like 'Clifton, Karachi, Sindh, Pakistan'.
+    We return (city_like, country).
+    """
+    parts = [p.strip() for p in display_name.split(",")]
+    if len(parts) >= 2:
+        country = parts[-1]
+        # choose a 'city-like' piece near the end (avoid micro-neighborhoods)
+        city_like = parts[-2]
+        return city_like, country
+    return display_name, None
 
-def deeplink_booking_with_keywords(city: str, area: Optional[str], keywords: str,
-                                   checkin: date, checkout: date, adults: int = 2) -> str:
-    # Softer keywording → more reliable results
-    parts: List[str] = [city]
+def build_precise_ss(city: str, area: Optional[str], geo: Dict[str, Any]) -> str:
+    city_guess, country = parse_city_country(geo.get("name", city))
     if area:
-        parts.append(area)
-    if keywords:
-        parts.append(keywords)
-    ss_raw = " ".join(parts).strip()
-    ss = urllib.parse.quote(ss_raw)
-    return (
-        "https://www.booking.com/searchresults.html"
-        f"?ss={ss}"
-        f"&checkin={checkin:%Y-%m-%d}"
-        f"&checkout={checkout:%Y-%m-%d}"
-        f"&group_adults={adults}&no_rooms=1&group_children=0"
-        f"&lang=en-us&src=index&sb=1&nflt="
-        f"&_mtu={_cachebuster(ss_raw)}"
-    )
+        base = f"{area}, {city}"
+    else:
+        base = city
+    if country:
+        return f"{base}, {country}"
+    return base
 
 def external_link_button(label: str, url: str):
-    # Valid, reliable, styled anchor (no nested <button>)
-    st.markdown(
-        f'<a class="btn-link" target="_blank" rel="noopener" href="{url}">{label}</a>',
-        unsafe_allow_html=True
+    st.markdown(f'<a class="btn-link" target="_blank" rel="noopener" href="{url}">{label}</a>',
+                unsafe_allow_html=True)
+
+# =========================================================
+# Booking deep links (location-first, softer filters)
+# =========================================================
+def deeplink_booking_city(precise_ss: str, lat: float, lon: float,
+                          checkin: date, checkout: date, adults: int = 2) -> str:
+    ss_q = urllib.parse.quote(precise_ss)
+    return (
+        "https://www.booking.com/searchresults.html"
+        f"?ss={ss_q}"
+        f"&checkin={checkin:%Y-%m-%d}"
+        f"&checkout={checkout:%Y-%m-%d}"
+        f"&group_adults={adults}&no_rooms=1&group_children=0"
+        f"&lang=en-us&src=index&sb=1"
+        # soft radius hint around coordinates (Booking often honors this)
+        f"&latitude={lat:.6f}&longitude={lon:.6f}&nflt=distance%3D0-5"
+        f"&_mtu={_cachebuster(precise_ss)}"
     )
+
+def deeplink_booking_card(precise_ss: str, lat: float, lon: float,
+                          checkin: date, checkout: date, adults: int = 2) -> str:
+    # For each card, keep ss identical (accurate location); let results differ naturally by Booking sorting.
+    return deeplink_booking_city(precise_ss, lat, lon, checkin, checkout, adults)
 
 # =========================================================
 # Geocoding & POIs (OpenStreetMap)
@@ -266,23 +223,20 @@ def fetch_pois(lat: float, lon: float, radius_m: int = 3000, kind: str = "landma
         return []
 
 def pick_unique(pois: List[Dict[str, Any]], n: int, used_names: Set[str], origin: tuple) -> List[Dict[str, Any]]:
-    if not pois:
-        return []
+    if not pois: return []
     olat, olon = origin
     enriched = []
     for p in pois:
-        if p["name"] in used_names:
-            continue
+        if p["name"] in used_names: continue
         d = haversine_km(olat, olon, p["lat"], p["lon"])
         enriched.append((d, p))
     enriched.sort(key=lambda x: x[0])
     chosen = [p for _, p in enriched[:n]]
-    for c in chosen:
-        used_names.add(c["name"])
+    for c in chosen: used_names.add(c["name"])
     return chosen
 
 # =========================================================
-# Budget (amount/day)
+# Budget
 # =========================================================
 def budget_notes(amount: int) -> str:
     if amount < 50:
@@ -308,31 +262,21 @@ def budget_notes(amount: int) -> str:
 """
 
 def budget_profile(amount: int) -> Dict[str, Any]:
-    if amount < 50:
-        return {"museums_per_day": 0, "food_style": "cheap"}
-    elif amount < 150:
-        return {"museums_per_day": 1, "food_style": "mid"}
-    else:
-        return {"museums_per_day": 2, "food_style": "fine"}
+    if amount < 50: return {"museums_per_day": 0, "food_style": "cheap"}
+    elif amount < 150: return {"museums_per_day": 1, "food_style": "mid"}
+    else: return {"museums_per_day": 2, "food_style": "fine"}
 
 # =========================================================
-# Hotel recommender (offline archetypes) + personalization
+# Hotels (archetypes)
 # =========================================================
 ARCHETYPES = [
-    {"key":"historic-boutique", "title":"Boutique near Old Town",
-     "tags":["walkable","character"], "good_for":["history","museums","architecture"]},
-    {"key":"central-midscale", "title":"Midscale near City Center",
-     "tags":["convenient","transport"], "good_for":["shopping","food","architecture","history"]},
-    {"key":"trendy-nightlife", "title":"Trendy spot in Nightlife District",
-     "tags":["bars","music"], "good_for":["nightlife","food","shopping"]},
-    {"key":"family-aparthotel", "title":"Aparthotel in Family Area",
-     "tags":["kitchen","space"], "good_for":["family","nature","shopping"]},
-    {"key":"waterfront-view", "title":"Waterfront / Park-side Hotel",
-     "tags":["views","quiet"], "good_for":["nature","architecture","family"]},
-    {"key":"business-chain", "title":"Reliable Business Chain near Metro",
-     "tags":["quiet","clean"], "good_for":["shopping","history","architecture","food"]},
-    {"key":"design-hotel", "title":"Design-Led Hotel near Arts District",
-     "tags":["aesthetic","boutiques"], "good_for":["architecture","museums","shopping","nightlife"]},
+    {"key":"historic-boutique","title":"Boutique near Old Town","tags":["walkable","character"],"good_for":["history","museums","architecture"]},
+    {"key":"central-midscale","title":"Midscale near City Center","tags":["convenient","transport"],"good_for":["shopping","food","architecture","history"]},
+    {"key":"trendy-nightlife","title":"Trendy spot in Nightlife District","tags":["bars","music"],"good_for":["nightlife","food","shopping"]},
+    {"key":"family-aparthotel","title":"Aparthotel in Family Area","tags":["kitchen","space"],"good_for":["family","nature","shopping"]},
+    {"key":"waterfront-view","title":"Waterfront / Park-side Hotel","tags":["views","quiet"],"good_for":["nature","architecture","family"]},
+    {"key":"business-chain","title":"Reliable Business Chain near Metro","tags":["quiet","clean"],"good_for":["shopping","history","architecture","food"]},
+    {"key":"design-hotel","title":"Design-Led Hotel near Arts District","tags":["aesthetic","boutiques"],"good_for":["architecture","museums","shopping","nightlife"]},
 ]
 
 def score_archetype(arch: Dict[str, Any], interests: List[str], amount: int,
@@ -340,27 +284,21 @@ def score_archetype(arch: Dict[str, Any], interests: List[str], amount: int,
     score = 0.0
     overlap = len(set(i.lower() for i in interests) & set(arch["good_for"]))
     score += 2.0 * overlap
-    if user_interest_bias:
-        score += 1.0 * len(user_interest_bias & set(arch["good_for"]))
-    if amount < 50 and arch["key"] in {"central-midscale","family-aparthotel","business-chain"}:
-        score += 1.5
-    if 50 <= amount < 150 and arch["key"] in {"historic-boutique","central-midscale","family-aparthotel","design-hotel","business-chain"}:
-        score += 1.8
-    if amount >= 150 and arch["key"] in {"design-hotel","waterfront-view","historic-boutique"}:
-        score += 2.2
+    if user_interest_bias: score += 1.0 * len(user_interest_bias & set(arch["good_for"]))
+    if amount < 50 and arch["key"] in {"central-midscale","family-aparthotel","business-chain"}: score += 1.5
+    if 50 <= amount < 150 and arch["key"] in {"historic-boutique","central-midscale","family-aparthotel","design-hotel","business-chain"}: score += 1.8
+    if amount >= 150 and arch["key"] in {"design-hotel","waterfront-view","historic-boutique"}: score += 2.2
     if area_hint:
         a = area_hint.lower()
-        if any(x in a for x in ["old", "historic", "city", "downtown", "bazaar"]):
-            if arch["key"] in {"historic-boutique","central-midscale","design-hotel"}: score += 1.2
-        if any(x in a for x in ["beach", "bay", "marina", "park", "water", "lake", "river"]):
-            if arch["key"] in {"waterfront-view","family-aparthotel"}: score += 1.2
-        if any(x in a for x in ["night", "soho", "party", "club"]):
-            if arch["key"] in {"trendy-nightlife","design-hotel"}: score += 1.2
+        if any(x in a for x in ["old","historic","city","downtown","bazaar"]) and arch["key"] in {"historic-boutique","central-midscale","design-hotel"}: score += 1.2
+        if any(x in a for x in ["beach","bay","marina","park","water","lake","river"]) and arch["key"] in {"waterfront-view","family-aparthotel"}: score += 1.2
+        if any(x in a for x in ["night","soho","party","club"]) and arch["key"] in {"trendy-nightlife","design-hotel"}: score += 1.2
     return score
 
 def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: date,
                            adults: int, interests: List[str], amount: int,
-                           user_interest_bias: Set[str], k: int = 8) -> List[Dict[str, Any]]:
+                           user_interest_bias: Set[str], precise_ss: str, lat: float, lon: float,
+                           k: int = 8) -> List[Dict[str, Any]]:
     area_txt = (area or "").strip()
     ranked = sorted(
         ARCHETYPES,
@@ -371,28 +309,19 @@ def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: dat
     for a in ranked[:k]:
         why = []
         matched = set(i.lower() for i in interests) & set(a["good_for"])
-        if matched:
-            why.append("interests: " + ", ".join(sorted(matched)))
+        if matched: why.append("interests: " + ", ".join(sorted(matched)))
         if user_interest_bias:
             hist_match = user_interest_bias & set(a["good_for"])
-            if hist_match:
-                why.append("history: " + ", ".join(sorted(hist_match)))
-        if area_txt:
-            why.append(f"good near **{area_txt}**")
+            if hist_match: why.append("history: " + ", ".join(sorted(hist_match)))
+        if area_txt: why.append(f"good near **{area_txt}**")
         if amount < 50:      why.append("budget: value")
         elif amount < 150:   why.append("budget: mid")
         else:                why.append("budget: premium")
 
-        # Simpler, reliable keywords
-        keywords = " ".join([a["title"], "hotel"]).strip()
-
-        link = deeplink_booking_with_keywords(
-            city=city,
-            area=area_txt or None,
-            keywords=keywords,
-            checkin=start,
-            checkout=end,
-            adults=adults
+        link = deeplink_booking_card(
+            precise_ss=precise_ss,
+            lat=lat, lon=lon,
+            checkin=start, checkout=end, adults=adults
         )
 
         out.append({
@@ -404,7 +333,7 @@ def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: dat
     return out
 
 # =========================================================
-# Itinerary builder (uses real POIs)
+# Itinerary builder
 # =========================================================
 def assemble_itinerary(lat: float, lon: float, city: str, area: str,
                        start_date: date, end_date: date,
@@ -457,14 +386,13 @@ def render_itinerary_markdown(header: str, days_plan: List[Dict[str, Any]]) -> s
         lines.append(f"\n### Day {idx}")
         for part in ["Morning", "Afternoon", "Evening"]:
             items = slots.get(part, [])
-            if not items:
-                continue
+            if not items: continue
             names = ", ".join([i["name"] for i in items])
             lines.append(f"- **{part}**: {names}")
     return "\n".join(lines)
 
 # =========================================================
-# User history (session-only)
+# History (session)
 # =========================================================
 def get_user_id() -> str:
     try:
@@ -474,24 +402,19 @@ def get_user_id() -> str:
     return str(user.get("id") or "guest")
 
 def get_user_history(uid: str) -> List[Dict[str, Any]]:
-    if "history" not in st.session_state:
-        st.session_state["history"] = {}
-    if uid not in st.session_state["history"]:
-        st.session_state["history"][uid] = []
+    if "history" not in st.session_state: st.session_state["history"] = {}
+    if uid not in st.session_state["history"]: st.session_state["history"][uid] = []
     return st.session_state["history"][uid]
 
 def add_history(uid: str, record: dict):
-    hist = get_user_history(uid)
-    hist.append(record)
-    st.session_state["history"][uid] = hist
+    hist = get_user_history(uid); hist.append(record); st.session_state["history"][uid] = hist
 
 def derive_interest_bias(uid: str) -> Set[str]:
     hist = get_user_history(uid)
     freq: Dict[str, int] = {}
     for trip in hist:
         for i in trip.get("interests", []):
-            k = i.lower()
-            freq[k] = freq.get(k, 0) + 1
+            k = i.lower(); freq[k] = freq.get(k, 0) + 1
     top = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:3]
     return set(k for k, _ in top)
 
@@ -526,19 +449,19 @@ st.caption(f"User: `{uid}`")
 
 if go:
     if not city:
-        st.error("Please enter a destination city.")
-        st.stop()
+        st.error("Please enter a destination city."); st.stop()
     if end_date <= start_date:
-        st.error("End date must be after Start date.")
-        st.stop()
+        st.error("End date must be after Start date."); st.stop()
 
-    q = combined_query(city, area or None)
-    geo = geocode_osm(q) or geocode_osm(city)
+    # Geocode city/area, then build precise search string for Booking
+    query = f"{area}, {city}" if area else city
+    geo = geocode_osm(query) or geocode_osm(city)
     if not geo:
-        st.error("Could not geolocate that place. Try a simpler query (just the city).")
-        st.stop()
+        st.error("Could not geolocate that place. Try a simpler query (just the city)."); st.stop()
 
     st.caption(f"📍 {geo['name']}  ({geo['lat']:.4f}, {geo['lon']:.4f})")
+
+    precise_ss = build_precise_ss(city, area or None, geo)
 
     with st.status("Finding nearby places & crafting itinerary...", expanded=False):
         header, days_plan = assemble_itinerary(
@@ -555,8 +478,17 @@ if go:
     user_bias = derive_interest_bias(uid)
     st.subheader("🏨 Recommended Places to Stay (Personalized)")
     hotel_cards = synthesize_hotel_cards(
-        city, (area or None), start_date, end_date, adults,
-        interests, int(budget_amount), user_bias, k=8
+        city=city,
+        area=(area or None),
+        start=start_date,
+        end=end_date,
+        adults=adults,
+        interests=interests,
+        amount=int(budget_amount),
+        user_interest_bias=user_bias,
+        precise_ss=precise_ss,
+        lat=geo["lat"], lon=geo["lon"],
+        k=8
     )
     for c in hotel_cards:
         with st.container(border=True):
@@ -567,20 +499,16 @@ if go:
             external_link_button("Open on Booking.com", c["link"])
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # Global city/area link (generic)
+    # Global link anchored to the exact place
     external_link_button(
         "🔗 See full results on Booking.com",
-        deeplink_booking_city(q, start_date, end_date, adults)
+        deeplink_booking_city(precise_ss, geo["lat"], geo["lon"], start_date, end_date, adults)
     )
 
     add_history(uid, {
-        "city": city,
-        "area": (area or "").strip(),
-        "start": f"{start_date}",
-        "end": f"{end_date}",
-        "adults": adults,
-        "budget": int(budget_amount),
-        "interests": interests
+        "city": city, "area": (area or "").strip(),
+        "start": f"{start_date}", "end": f"{end_date}",
+        "adults": adults, "budget": int(budget_amount), "interests": interests
     })
 
     pkg = {
@@ -589,7 +517,7 @@ if go:
         "budget_per_day": int(budget_amount),
         "budget_notes": budget_notes(int(budget_amount)),
         "stay_recommendations": hotel_cards,
-        "deeplink_city": deeplink_booking_city(q, start_date, end_date, adults)
+        "deeplink_city": deeplink_booking_city(precise_ss, geo["lat"], geo["lon"], start_date, end_date, adults)
     }
     st.download_button("⬇️ Download Plan (JSON)",
                        data=json.dumps(pkg, ensure_ascii=False, indent=2),
