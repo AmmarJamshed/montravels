@@ -6,6 +6,8 @@ from datetime import date, timedelta
 import urllib.parse
 import requests
 import streamlit as st
+import uuid
+from typing import Optional
 
 # =========================================================
 # THEME (Pokémon-inspired Travel Guide)
@@ -13,22 +15,18 @@ import streamlit as st
 def apply_pokemon_theme():
     st.markdown("""
         <style>
-        /* General app background */
         .stApp {
             background-color: #F5F7FA;
             font-family: 'Trebuchet MS', sans-serif;
             color: #2C2C2C;
         }
-        /* Title */
         h1 {
-            color: #FFCC00;  /* Pikachu yellow */
+            color: #FFCC00;
             text-shadow: 2px 2px 0px #3B4CCA;
         }
-        /* Subheaders */
         h2, h3 {
-            color: #3B4CCA;  /* Pokémon blue */
+            color: #3B4CCA;
         }
-        /* Sidebar */
         section[data-testid="stSidebar"] {
             background-color: #3B4CCA;
             color: white;
@@ -40,7 +38,6 @@ def apply_pokemon_theme():
         section[data-testid="stSidebar"] span {
             color: white !important;
         }
-        /* Buttons */
         div.stButton > button {
             background-color: #FF1C1C;
             color: white;
@@ -54,7 +51,6 @@ def apply_pokemon_theme():
             color: #2C2C2C;
             border: 2px solid #FF1C1C;
         }
-        /* Card containers */
         .stContainer {
             background-color: #FFFFFF;
             border-radius: 16px;
@@ -63,7 +59,6 @@ def apply_pokemon_theme():
             border: 2px solid #FFCC00;
             box-shadow: 2px 2px 6px rgba(0,0,0,0.1);
         }
-        /* Links */
         a {
             color: #3B4CCA;
             text-decoration: none;
@@ -72,7 +67,6 @@ def apply_pokemon_theme():
         a:hover {
             color: #FF1C1C;
         }
-        /* Captions */
         .stCaption {
             color: #4CAF50 !important;
         }
@@ -80,7 +74,7 @@ def apply_pokemon_theme():
     """, unsafe_allow_html=True)
 
 # =========================================================
-# Small utilities
+# Utilities
 # =========================================================
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -91,7 +85,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dphi/2)**2 + math.cos(p1) * math.cos(p2) * math.sin(dl/2)**2
     return 2 * R * math.asin(math.sqrt(a))
 
-def combined_query(city: str, area: str | None) -> str:
+def combined_query(city: str, area: Optional[str]) -> str:
     return (f"{city} {area}".strip() if area else city).strip()
 
 def _cachebuster(seed: str) -> str:
@@ -100,19 +94,16 @@ def _cachebuster(seed: str) -> str:
 
 def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adults: int = 2):
     q = urllib.parse.quote(city_or_area)
-    u = (
+    return (
         "https://www.booking.com/searchresults.html"
         f"?ss={q}"
-        f"&ssne={q}&ssne_untouched=1"
         f"&checkin={checkin:%Y-%m-%d}"
         f"&checkout={checkout:%Y-%m-%d}"
         f"&group_adults={adults}&no_rooms=1&group_children=0"
-        f"&lang=en-us&src=index&sb=1&nflt="
-        f"&_mtu={_cachebuster(city_or_area)}"
+        f"&lang=en-us&_mtu={_cachebuster(city_or_area)}"
     )
-    return u
 
-def deeplink_booking_with_keywords(city: str, area: str | None, keywords: str,
+def deeplink_booking_with_keywords(city: str, area: Optional[str], keywords: str,
                                    checkin: date, checkout: date, adults: int = 2):
     parts = [city]
     if area:
@@ -121,17 +112,14 @@ def deeplink_booking_with_keywords(city: str, area: str | None, keywords: str,
         parts.append(keywords)
     ss_raw = " ".join(parts).strip()
     ss = urllib.parse.quote(ss_raw)
-    u = (
+    return (
         "https://www.booking.com/searchresults.html"
         f"?ss={ss}"
-        f"&ssne={ss}&ssne_untouched=1"
         f"&checkin={checkin:%Y-%m-%d}"
         f"&checkout={checkout:%Y-%m-%d}"
         f"&group_adults={adults}&no_rooms=1&group_children=0"
-        f"&lang=en-us&src=index&sb=1&nflt="
-        f"&_mtu={_cachebuster(ss_raw)}"
+        f"&lang=en-us&_mtu={_cachebuster(ss_raw)}"
     )
-    return u
 
 def external_link_button(label: str, url: str):
     st.markdown(
@@ -141,23 +129,67 @@ def external_link_button(label: str, url: str):
     )
 
 # =========================================================
-# (All your existing functions for geocoding, POIs, budget,
-# hotel archetypes, itinerary, and user history remain
-# UNCHANGED – I’ve not repeated them here to save space,
-# but you can keep the exact same ones we already debugged.)
+# Session helpers (user id & history)
 # =========================================================
 
-# ... [KEEP the same functions from previous working code:
-# geocode_osm, fetch_pois, budget_notes, budget_profile,
-# ARCHETYPES, score_archetype, synthesize_hotel_cards,
-# assemble_itinerary, render_itinerary_markdown,
-# get_user_id, get_user_history, add_history,
-# derive_interest_bias]
+def get_user_id() -> str:
+    if "user_id" not in st.session_state:
+        st.session_state["user_id"] = str(uuid.uuid4())[:8]
+    return st.session_state["user_id"]
+
+def get_user_history(uid: str):
+    return st.session_state.get(f"history_{uid}", [])
+
+def add_history(uid: str, trip: dict):
+    key = f"history_{uid}"
+    if key not in st.session_state:
+        st.session_state[key] = []
+    st.session_state[key].append(trip)
+    st.session_state[key] = st.session_state[key][-10:]
+
+# =========================================================
+# Stubs for missing functions (replace with real logic)
 # =========================================================
 
+def geocode_osm(query: str):
+    # Dummy geocode
+    return {"name": query.title(), "lat": 40.0, "lon": 30.0}
+
+def assemble_itinerary(lat, lon, city, area, start_date, end_date, interests, budget):
+    header = f"Trip to {city}"
+    days_plan = {f"{start_date}": [f"Explore {city} center"]}
+    return header, days_plan
+
+def render_itinerary_markdown(header, days_plan):
+    return f"### {header}\n\n{json.dumps(days_plan, indent=2)}"
+
+def budget_notes(budget: int):
+    if budget < 50:
+        return "💸 Budget-friendly trip — expect hostels and street food."
+    elif budget < 200:
+        return "💰 Mid-range trip — mix of hotels & restaurants."
+    else:
+        return "🏰 Luxury trip — premium stays & fine dining."
+
+def derive_interest_bias(uid: str):
+    return {"food": 1.0, "history": 0.8}
+
+def synthesize_hotel_cards(city, area, start, end, adults, interests, budget, bias, k=5):
+    return [
+        {
+            "title": f"{city} Stay {i+1}",
+            "why": f"Great for {', '.join(interests)}",
+            "tags": interests,
+            "link": deeplink_booking_city(city, start, end, adults)
+        }
+        for i in range(k)
+    ]
+
+# =========================================================
 # UI
+# =========================================================
 st.set_page_config(page_title="MonTravels — Personalized Planner", page_icon="🧭", layout="wide")
-apply_pokemon_theme()  # 🎨 Apply the theme here
+apply_pokemon_theme()
 st.title("🧭 MonTravels")
 
 with st.sidebar:
@@ -197,7 +229,7 @@ if go:
 
     st.caption(f"📍 {geo['name']}  ({geo['lat']:.4f}, {geo['lon']:.4f})")
 
-    with st.status("Finding nearby places & crafting itinerary...", expanded=False):
+    with st.spinner("Finding nearby places & crafting itinerary..."):
         header, days_plan = assemble_itinerary(
             geo["lat"], geo["lon"], city, (area or "").strip(),
             start_date, end_date, interests, int(budget_amount)
@@ -213,10 +245,10 @@ if go:
     st.subheader("🏨 Recommended Places to Stay (Personalized)")
     hotel_cards = synthesize_hotel_cards(
         city, (area or None), start_date, end_date, adults,
-        interests, int(budget_amount), user_bias, k=8
+        interests, int(budget_amount), user_bias, k=5
     )
     for c in hotel_cards:
-        with st.container(border=True):
+        with st.container():
             st.markdown(f"**{c['title']}**")
             st.caption(c["why"])
             st.write("Tags:", ", ".join(c["tags"]))
