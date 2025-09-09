@@ -1,3 +1,5 @@
+# mn.py
+
 import math
 import json
 import time
@@ -6,8 +8,7 @@ from datetime import date, timedelta
 import urllib.parse
 import requests
 import streamlit as st
-import uuid
-from typing import Optional
+from typing import Optional, List, Set, Dict, Any
 
 # =========================================================
 # THEME (Pokémon-inspired Travel Guide)
@@ -15,43 +16,46 @@ from typing import Optional
 def apply_pokemon_theme():
     st.markdown("""
         <style>
+        /* App background + base font */
         .stApp {
             background-color: #F5F7FA;
             font-family: 'Trebuchet MS', sans-serif;
             color: #2C2C2C;
         }
+        /* Headings */
         h1 {
-            color: #FFCC00;
-            text-shadow: 2px 2px 0px #3B4CCA;
+            color: #FFCC00;            /* Pikachu yellow */
+            text-shadow: 2px 2px 0px #3B4CCA;  /* Pokémon blue outline */
         }
         h2, h3 {
             color: #3B4CCA;
         }
+        /* Sidebar */
         section[data-testid="stSidebar"] {
             background-color: #3B4CCA;
             color: white;
         }
-        section[data-testid="stSidebar"] h1, 
-        section[data-testid="stSidebar"] h2, 
-        section[data-testid="stSidebar"] h3, 
-        section[data-testid="stSidebar"] label, 
-        section[data-testid="stSidebar"] span {
+        section[data-testid="stSidebar"] * {
             color: white !important;
         }
-        div.stButton > button {
-            background-color: #FF1C1C;
+        /* Buttons (Streamlit + custom <a><button>) */
+        a > button, div.stButton > button {
+            background-color: #FF1C1C; /* Poké-ball red */
             color: white;
             border-radius: 12px;
             border: 2px solid #3B4CCA;
             font-weight: bold;
             transition: 0.3s;
+            padding: 6px 12px;
+            cursor: pointer;
         }
-        div.stButton > button:hover {
+        a > button:hover, div.stButton > button:hover {
             background-color: #FFCC00;
             color: #2C2C2C;
             border: 2px solid #FF1C1C;
         }
-        .stContainer {
+        /* Card-ish containers (used via st.container(border=True)) */
+        .pokecard {
             background-color: #FFFFFF;
             border-radius: 16px;
             padding: 12px;
@@ -59,6 +63,7 @@ def apply_pokemon_theme():
             border: 2px solid #FFCC00;
             box-shadow: 2px 2px 6px rgba(0,0,0,0.1);
         }
+        /* Links */
         a {
             color: #3B4CCA;
             text-decoration: none;
@@ -67,30 +72,18 @@ def apply_pokemon_theme():
         a:hover {
             color: #FF1C1C;
         }
-        .stCaption {
+        /* Captions / notes */
+        .stCaption, span[data-baseweb="tag"] {
             color: #4CAF50 !important;
         }
         </style>
     """, unsafe_allow_html=True)
 
+
 # =========================================================
 # Utilities
 # =========================================================
-
-import math
-import json
-import time
-import hashlib
-from datetime import date, timedelta
-import urllib.parse
-import requests
-import streamlit as st
-
-# =========================================================
-# Small utilities
-# =========================================================
-
-def haversine_km(lat1, lon1, lat2, lon2):
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -98,17 +91,16 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dphi/2)**2 + math.cos(p1) * math.cos(p2) * math.sin(dl/2)**2
     return 2 * R * math.asin(math.sqrt(a))
 
-def combined_query(city: str, area: str | None) -> str:
+def combined_query(city: str, area: Optional[str]) -> str:
     return (f"{city} {area}".strip() if area else city).strip()
 
 def _cachebuster(seed: str) -> str:
-    # unique per card/click; Booking ignores unknown params but this breaks SPA caching
     raw = f"{seed}-{time.time_ns()}"
     return hashlib.md5(raw.encode()).hexdigest()[:10]
 
-def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adults: int = 2):
+def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adults: int = 2) -> str:
     q = urllib.parse.quote(city_or_area)
-    u = (
+    return (
         "https://www.booking.com/searchresults.html"
         f"?ss={q}"
         f"&ssne={q}&ssne_untouched=1"
@@ -118,18 +110,17 @@ def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adul
         f"&lang=en-us&src=index&sb=1&nflt="
         f"&_mtu={_cachebuster(city_or_area)}"
     )
-    return u
 
-def deeplink_booking_with_keywords(city: str, area: str | None, keywords: str,
-                                   checkin: date, checkout: date, adults: int = 2):
-    parts = [city]
+def deeplink_booking_with_keywords(city: str, area: Optional[str], keywords: str,
+                                   checkin: date, checkout: date, adults: int = 2) -> str:
+    parts: List[str] = [city]
     if area:
         parts.append(area)
     if keywords:
         parts.append(keywords)
     ss_raw = " ".join(parts).strip()
     ss = urllib.parse.quote(ss_raw)
-    u = (
+    return (
         "https://www.booking.com/searchresults.html"
         f"?ss={ss}"
         f"&ssne={ss}&ssne_untouched=1"
@@ -139,22 +130,21 @@ def deeplink_booking_with_keywords(city: str, area: str | None, keywords: str,
         f"&lang=en-us&src=index&sb=1&nflt="
         f"&_mtu={_cachebuster(ss_raw)}"
     )
-    return u
 
 def external_link_button(label: str, url: str):
-    # Force open in a new tab so Booking's SPA state can't hijack next clicks
+    # Open in new tab to avoid Booking SPA state persisting across clicks
     st.markdown(
         f'<a target="_blank" rel="noopener" href="{url}" '
-        f'style="text-decoration:none;"><button class="stButton">{label}</button></a>',
+        f'style="text-decoration:none;"><button>{label}</button></a>',
         unsafe_allow_html=True
     )
+
 
 # =========================================================
 # Geocoding & POIs (OpenStreetMap)
 # =========================================================
-
 @st.cache_data(ttl=3600, show_spinner=False)
-def geocode_osm(query: str):
+def geocode_osm(query: str) -> Optional[Dict[str, Any]]:
     try:
         url = "https://nominatim.openstreetmap.org/search"
         params = {"q": query, "format": "json", "limit": 1}
@@ -190,8 +180,8 @@ OSM_TARGETS = {
     "viewpoint": [('tourism', 'viewpoint'), ('natural', 'peak'), ('tourism', 'information')],
 }
 
-def build_overpass_query(lat, lon, radius_m, kv_pairs):
-    parts = []
+def build_overpass_query(lat: float, lon: float, radius_m: int, kv_pairs: List[List[str]]) -> str:
+    parts: List[str] = []
     for k, v in kv_pairs:
         if str(v).startswith('~'):
             parts += [
@@ -209,7 +199,7 @@ def build_overpass_query(lat, lon, radius_m, kv_pairs):
     return f"[out:json][timeout:30];({core});out center 60;"
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_pois(lat, lon, radius_m=3000, kind="landmark", limit=50):
+def fetch_pois(lat: float, lon: float, radius_m: int = 3000, kind: str = "landmark", limit: int = 50) -> List[Dict[str, Any]]:
     try:
         kv = OSM_TARGETS.get(kind, [])
         if not kv:
@@ -235,7 +225,7 @@ def fetch_pois(lat, lon, radius_m=3000, kind="landmark", limit=50):
     except Exception:
         return []
 
-def pick_unique(pois, n, used_names, origin):
+def pick_unique(pois: List[Dict[str, Any]], n: int, used_names: Set[str], origin: tuple) -> List[Dict[str, Any]]:
     if not pois:
         return []
     olat, olon = origin
@@ -251,10 +241,10 @@ def pick_unique(pois, n, used_names, origin):
         used_names.add(c["name"])
     return chosen
 
+
 # =========================================================
 # Budget (amount/day)
 # =========================================================
-
 def budget_notes(amount: int) -> str:
     if amount < 50:
         return f"""
@@ -278,7 +268,7 @@ def budget_notes(amount: int) -> str:
 - Upscale neighborhoods & experiences.
 """
 
-def budget_profile(amount: int):
+def budget_profile(amount: int) -> Dict[str, Any]:
     if amount < 50:
         return {"museums_per_day": 0, "food_style": "cheap"}
     elif amount < 150:
@@ -286,10 +276,10 @@ def budget_profile(amount: int):
     else:
         return {"museums_per_day": 2, "food_style": "fine"}
 
+
 # =========================================================
 # Hotel recommender (offline archetypes) + personalization
 # =========================================================
-
 ARCHETYPES = [
     {"key":"historic-boutique", "title":"Boutique near Old Town",
      "tags":["walkable","character"], "good_for":["history","museums","architecture"]},
@@ -307,7 +297,8 @@ ARCHETYPES = [
      "tags":["aesthetic","boutiques"], "good_for":["architecture","museums","shopping","nightlife"]},
 ]
 
-def score_archetype(arch, interests: list[str], amount: int, area_hint: str | None, user_interest_bias: set[str]):
+def score_archetype(arch: Dict[str, Any], interests: List[str], amount: int,
+                    area_hint: Optional[str], user_interest_bias: Set[str]) -> float:
     score = 0.0
     overlap = len(set(i.lower() for i in interests) & set(arch["good_for"]))
     score += 2.0 * overlap
@@ -332,16 +323,16 @@ def score_archetype(arch, interests: list[str], amount: int, area_hint: str | No
                 score += 1.2
     return score
 
-def synthesize_hotel_cards(city: str, area: str | None, start: date, end: date,
-                           adults: int, interests: list[str], amount: int,
-                           user_interest_bias: set[str], k: int = 8):
+def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: date,
+                           adults: int, interests: List[str], amount: int,
+                           user_interest_bias: Set[str], k: int = 8) -> List[Dict[str, Any]]:
     area_txt = (area or "").strip()
     ranked = sorted(
         ARCHETYPES,
         key=lambda a: score_archetype(a, interests, amount, area_txt, user_interest_bias),
         reverse=True
     )
-    out = []
+    out: List[Dict[str, Any]] = []
     for a in ranked[:k]:
         why = []
         matched = set(i.lower() for i in interests) & set(a["good_for"])
@@ -357,7 +348,6 @@ def synthesize_hotel_cards(city: str, area: str | None, start: date, end: date,
         elif amount < 150:   why.append("budget: mid")
         else:                why.append("budget: premium")
 
-        # Per-card keywords → unique Booking.com results per card
         budget_keyword = "budget" if amount < 50 else ("luxury" if amount >= 150 else "")
         keywords = " ".join([a["title"], " ".join(a["tags"]), "hotel", budget_keyword]).strip()
 
@@ -378,17 +368,19 @@ def synthesize_hotel_cards(city: str, area: str | None, start: date, end: date,
         })
     return out
 
+
 # =========================================================
 # Itinerary builder (uses real POIs)
 # =========================================================
-
-def assemble_itinerary(lat, lon, city, area, start_date, end_date, interests, amount):
+def assemble_itinerary(lat: float, lon: float, city: str, area: str,
+                       start_date: date, end_date: date,
+                       interests: List[str], amount: int):
     days = max((end_date - start_date).days, 1)
     profile = budget_profile(amount)
     museums_per_day = profile["museums_per_day"]
     food_style = profile["food_style"]
 
-    pools = {}
+    pools: Dict[str, List[Dict[str, Any]]] = {}
     for k in ["landmark", "museum", "park", "cafe", "restaurant", "viewpoint"]:
         pools[k] = fetch_pois(lat, lon, radius_m=3000, kind=k, limit=50)
 
@@ -401,13 +393,13 @@ def assemble_itinerary(lat, lon, city, area, start_date, end_date, interests, am
             picks = pick_unique(pools["restaurant"], 1, used, origin) or pick_unique(pools["cafe"], 1, used, origin)
         return picks
 
-    used_names = set()
+    used_names: Set[str] = set()
     origin = (lat, lon)
-    days_out = []
+    days_out: List[Dict[str, Any]] = []
     for _ in range(days):
-        morning = []
-        afternoon = []
-        evening = []
+        morning: List[Dict[str, Any]] = []
+        afternoon: List[Dict[str, Any]] = []
+        evening: List[Dict[str, Any]] = []
 
         morning += pick_unique(pools["landmark"], 1, used_names, origin)
         if museums_per_day >= 1:
@@ -425,7 +417,7 @@ def assemble_itinerary(lat, lon, city, area, start_date, end_date, interests, am
     header = f"## {city}" + (f" ({area})" if area else "") + f" — {days}-Day Itinerary"
     return header, days_out
 
-def render_itinerary_markdown(header, days_plan):
+def render_itinerary_markdown(header: str, days_plan: List[Dict[str, Any]]) -> str:
     lines = [header]
     for idx, slots in enumerate(days_plan, start=1):
         lines.append(f"\n### Day {idx}")
@@ -437,18 +429,19 @@ def render_itinerary_markdown(header, days_plan):
             lines.append(f"- **{part}**: {names}")
     return "\n".join(lines)
 
-# =========================================================
-# User history via st.experimental_user
-# =========================================================
 
-def get_user_id():
+# =========================================================
+# User history (session-only)
+# =========================================================
+def get_user_id() -> str:
+    # Works locally too; falls back to "guest"
     try:
         user = st.experimental_user or {}
     except Exception:
         user = {}
     return str(user.get("id") or "guest")
 
-def get_user_history(uid: str):
+def get_user_history(uid: str) -> List[Dict[str, Any]]:
     if "history" not in st.session_state:
         st.session_state["history"] = {}
     if uid not in st.session_state["history"]:
@@ -460,9 +453,9 @@ def add_history(uid: str, record: dict):
     hist.append(record)
     st.session_state["history"][uid] = hist
 
-def derive_interest_bias(uid: str) -> set[str]:
+def derive_interest_bias(uid: str) -> Set[str]:
     hist = get_user_history(uid)
-    freq = {}
+    freq: Dict[str, int] = {}
     for trip in hist:
         for i in trip.get("interests", []):
             k = i.lower()
@@ -470,11 +463,13 @@ def derive_interest_bias(uid: str) -> set[str]:
     top = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:3]
     return set(k for k, _ in top)
 
+
 # =========================================================
 # UI
 # =========================================================
-
 st.set_page_config(page_title="MonTravels — Personalized Planner", page_icon="🧭", layout="wide")
+apply_pokemon_theme()   # ✅ Apply Pokémon theme
+
 st.title("🧭 MonTravels")
 
 with st.sidebar:
@@ -533,11 +528,14 @@ if go:
         interests, int(budget_amount), user_bias, k=8
     )
     for c in hotel_cards:
+        # add a nice card wrapper
         with st.container(border=True):
+            st.markdown('<div class="pokecard">', unsafe_allow_html=True)
             st.markdown(f"**{c['title']}**")
             st.caption(c["why"])
             st.write("Tags:", ", ".join(c["tags"]))
-            external_link_button("Open on Booking.com", c["link"])  # open in new tab + cache-busted
+            external_link_button("Open on Booking.com", c["link"])  # opens in new tab + cache-busted
+            st.markdown('</div>', unsafe_allow_html=True)
 
     # Global city/area link (generic)
     external_link_button(
@@ -573,4 +571,3 @@ if go:
 
 else:
     st.info("Enter a city (and optional area), pick dates & budget, select interests, then click **Build Personalized Plan**.")
-
