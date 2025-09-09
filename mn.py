@@ -6,11 +6,10 @@ import requests
 import streamlit as st
 
 # =========================================================
-# Utilities
+# Small utilities
 # =========================================================
 
 def haversine_km(lat1, lon1, lat2, lon2):
-    # distance between two lat/lon pairs in KM
     R = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -18,16 +17,34 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dphi/2)**2 + math.cos(p1) * math.cos(p2) * math.sin(dl/2)**2
     return 2 * R * math.asin(math.sqrt(a))
 
-def deeplink_booking(query_text: str, checkin: date, checkout: date, adults: int = 2):
-    q = urllib.parse.quote(query_text)
+def combined_query(city: str, area: str | None) -> str:
+    return (f"{city} {area}".strip() if area else city).strip()
+
+def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adults: int = 2):
+    q = urllib.parse.quote(city_or_area)
     return (
         "https://www.booking.com/searchresults.html"
         f"?ss={q}&checkin={checkin:%Y-%m-%d}&checkout={checkout:%Y-%m-%d}"
         f"&group_adults={adults}&no_rooms=1&group_children=0"
     )
 
-def combined_query(city: str, area: str | None) -> str:
-    return (f"{city} {area}".strip() if area else city).strip()
+def deeplink_booking_with_keywords(city: str, area: str | None, keywords: str,
+                                   checkin: date, checkout: date, adults: int = 2):
+    """
+    Per-card keyworded query so each link returns different results.
+    Example keywords: "Boutique near Old Town walkable character hotel"
+    """
+    parts = [city]
+    if area:
+        parts.append(area)
+    if keywords:
+        parts.append(keywords)
+    ss = urllib.parse.quote(" ".join(parts).strip())
+    return (
+        "https://www.booking.com/searchresults.html"
+        f"?ss={ss}&checkin={checkin:%Y-%m-%d}&checkout={checkout:%Y-%m-%d}"
+        f"&group_adults={adults}&no_rooms=1&group_children=0"
+    )
 
 # =========================================================
 # Geocoding & POIs (OpenStreetMap)
@@ -35,7 +52,6 @@ def combined_query(city: str, area: str | None) -> str:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def geocode_osm(query: str):
-    """Geocode a place via OSM Nominatim (no key)."""
     try:
         url = "https://nominatim.openstreetmap.org/search"
         params = {"q": query, "format": "json", "limit": 1}
@@ -44,11 +60,7 @@ def geocode_osm(query: str):
         r.raise_for_status()
         js = r.json() or []
         if js:
-            return {
-                "lat": float(js[0]["lat"]),
-                "lon": float(js[0]["lon"]),
-                "name": js[0]["display_name"]
-            }
+            return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0]["display_name"]}
     except Exception:
         pass
     return None
@@ -56,98 +68,71 @@ def geocode_osm(query: str):
 OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
 
 OSM_TARGETS = {
-    # tourism=attraction also catches famous landmarks/monuments
     "landmark": [
         ('tourism', 'attraction'),
-        ('historic', '~.*'),       # any historic
+        ('historic', '~.*'),
         ('building', 'cathedral'),
         ('amenity', 'place_of_worship'),
         ('man_made', 'tower'),
     ],
-    "museum": [
-        ('tourism', 'museum')
-    ],
+    "museum": [('tourism', 'museum')],
     "park": [
         ('leisure', 'park'),
         ('leisure', 'garden'),
         ('natural', 'wood'),
         ('landuse', 'recreation_ground'),
     ],
-    "cafe": [
-        ('amenity', 'cafe'),
-        ('amenity', 'fast_food')
-    ],
-    "restaurant": [
-        ('amenity', 'restaurant'),
-        ('amenity', 'food_court')
-    ],
-    "viewpoint": [
-        ('tourism', 'viewpoint'),
-        ('natural', 'peak'),
-        ('tourism', 'information')  # sometimes scenic info points
-    ],
+    "cafe": [('amenity', 'cafe'), ('amenity', 'fast_food')],
+    "restaurant": [('amenity', 'restaurant'), ('amenity', 'food_court')],
+    "viewpoint": [('tourism', 'viewpoint'), ('natural', 'peak'), ('tourism', 'information')],
 }
 
 def build_overpass_query(lat, lon, radius_m, kv_pairs):
-    # kv_pairs is list of (key, value) where value may be literal or regex (~)
     parts = []
     for k, v in kv_pairs:
-        if v.startswith('~'):
-            parts.append(f'node["{k}"{v}](around:{radius_m},{lat},{lon});')
-            parts.append(f'way["{k}"{v}](around:{radius_m},{lat},{lon});')
-            parts.append(f'relation["{k}"{v}](around:{radius_m},{lat},{lon});')
+        if str(v).startswith('~'):
+            parts += [
+                f'node["{k}"{v}](around:{radius_m},{lat},{lon});',
+                f'way["{k}"{v}](around:{radius_m},{lat},{lon});',
+                f'relation["{k}"{v}](around:{radius_m},{lat},{lon});',
+            ]
         else:
-            parts.append(f'node["{k}"="{v}"](around:{radius_m},{lat},{lon});')
-            parts.append(f'way["{k}"="{v}"](around:{radius_m},{lat},{lon});')
-            parts.append(f'relation["{k}"="{v}"](around:{radius_m},{lat},{lon});')
+            parts += [
+                f'node["{k}"="{v}"](around:{radius_m},{lat},{lon});',
+                f'way["{k}"="{v}"](around:{radius_m},{lat},{lon});',
+                f'relation["{k}"="{v}"](around:{radius_m},{lat},{lon});',
+            ]
     core = "\n".join(parts)
-    q = f"""
-    [out:json][timeout:30];
-    (
-      {core}
-    );
-    out center 60;
-    """
-    return q
+    return f"[out:json][timeout:30];({core});out center 60;"
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_pois(lat, lon, radius_m=2500, kind="landmark", limit=30):
-    """Fetch POIs from Overpass for a given category near lat/lon."""
+def fetch_pois(lat, lon, radius_m=3000, kind="landmark", limit=50):
     try:
         kv = OSM_TARGETS.get(kind, [])
         if not kv:
             return []
-        query = build_overpass_query(lat, lon, radius_m, kv)
-        r = requests.post(OVERPASS_ENDPOINT, data={"data": query}, timeout=40)
+        q = build_overpass_query(lat, lon, radius_m, kv)
+        r = requests.post(OVERPASS_ENDPOINT, data={"data": q}, timeout=40)
         r.raise_for_status()
         elements = r.json().get("elements", [])
-        out = []
-        seen_names = set()
+        out, seen = [], set()
         for e in elements:
             tags = e.get("tags", {})
             name = tags.get("name")
-            # Some objects may lack names; skip
-            if not name or name in seen_names:
+            if not name or name in seen:
                 continue
-            seen_names.add(name)
+            seen.add(name)
             center = e.get("center", {})
             elat = center.get("lat", e.get("lat"))
             elon = center.get("lon", e.get("lon"))
             if elat is None or elon is None:
                 continue
-            out.append({
-                "name": name,
-                "lat": float(elat),
-                "lon": float(elon),
-                "tags": tags
-            })
-        # simple de-dup and trim
+            out.append({"name": name, "lat": float(elat), "lon": float(elon), "tags": tags})
         return out[:limit]
     except Exception:
         return []
 
 def pick_unique(pois, n, used_names, origin):
-    """Pick up to n POIs not used yet, closest-first to origin (lat,lon)."""
     if not pois:
         return []
     olat, olon = origin
@@ -164,40 +149,33 @@ def pick_unique(pois, n, used_names, origin):
     return chosen
 
 # =========================================================
-# Budget (amount/day) policy
+# Budget (amount/day)
 # =========================================================
 
 def budget_notes(amount: int) -> str:
     if amount < 50:
         return f"""
 **Budget (~${amount}/day)**
-- Prioritize free landmarks, mosques/temples, and public parks.
+- Prioritize free landmarks and public parks.
 - Street food & local cafés (~$5–10/meal).
-- Public transport; avoid pricey tours unless must-see.
+- Use public transport; limit paid tours.
 """
     elif amount < 150:
         return f"""
 **Budget (~${amount}/day)**
-- Mix of free & ticketed attractions (~$10–20 entry).
+- Mix free & ticketed attractions (~$10–20 entry).
 - Casual sit-down restaurants (~$15–30/meal).
-- A couple of guided activities during the trip.
+- A couple of guided activities for the trip.
 """
     else:
         return f"""
 **Budget (~${amount}/day)**
-- Premium/unique attractions ($50+), private or small-group tours.
+- Premium attractions ($50+), private/small-group tours.
 - Fine dining ($50–100+/meal).
 - Upscale neighborhoods & experiences.
 """
 
 def budget_profile(amount: int):
-    """
-    Decide how many 'paid' vs 'free' items to include per day.
-    We approximate:
-      landmarks/viewpoints/parks = free
-      museums = likely paid
-      restaurants/cafes = food cost driven by budget
-    """
     if amount < 50:
         return {"museums_per_day": 0, "food_style": "cheap"}
     elif amount < 150:
@@ -206,7 +184,7 @@ def budget_profile(amount: int):
         return {"museums_per_day": 2, "food_style": "fine"}
 
 # =========================================================
-# Personalized hotel recommender (offline archetypes)
+# Hotel recommender (offline archetypes) + personalization
 # =========================================================
 
 ARCHETYPES = [
@@ -228,21 +206,16 @@ ARCHETYPES = [
 
 def score_archetype(arch, interests: list[str], amount: int, area_hint: str | None, user_interest_bias: set[str]):
     score = 0.0
-    # direct interests
     overlap = len(set(i.lower() for i in interests) & set(arch["good_for"]))
     score += 2.0 * overlap
-    # user historical interest bias
     if user_interest_bias:
-        hist_overlap = len(user_interest_bias & set(arch["good_for"]))
-        score += 1.0 * hist_overlap
-    # budget tilt
+        score += 1.0 * len(user_interest_bias & set(arch["good_for"]))
     if amount < 50 and arch["key"] in {"central-midscale","family-aparthotel","business-chain"}:
         score += 1.5
     if 50 <= amount < 150 and arch["key"] in {"historic-boutique","central-midscale","family-aparthotel","design-hotel","business-chain"}:
         score += 1.8
     if amount >= 150 and arch["key"] in {"design-hotel","waterfront-view","historic-boutique"}:
         score += 2.2
-    # area hint heuristics
     if area_hint:
         a = area_hint.lower()
         if any(x in a for x in ["old", "historic", "city", "downtown", "bazaar"]):
@@ -260,14 +233,13 @@ def synthesize_hotel_cards(city: str, area: str | None, start: date, end: date,
                            adults: int, interests: list[str], amount: int,
                            user_interest_bias: set[str], k: int = 8):
     area_txt = (area or "").strip()
-    base_query = combined_query(city, area_txt or None)
-    archetypes = sorted(
+    ranked = sorted(
         ARCHETYPES,
         key=lambda a: score_archetype(a, interests, amount, area_txt, user_interest_bias),
         reverse=True
     )
     out = []
-    for a in archetypes[:k]:
+    for a in ranked[:k]:
         why = []
         matched = set(i.lower() for i in interests) & set(a["good_for"])
         if matched:
@@ -278,80 +250,74 @@ def synthesize_hotel_cards(city: str, area: str | None, start: date, end: date,
                 why.append("history: " + ", ".join(sorted(hist_match)))
         if area_txt:
             why.append(f"good near **{area_txt}**")
-        # budget note
-        if amount < 50: why.append("budget: value")
-        elif amount < 150: why.append("budget: mid")
-        else: why.append("budget: premium")
+        if amount < 50:      why.append("budget: value")
+        elif amount < 150:   why.append("budget: mid")
+        else:                why.append("budget: premium")
+
+        # Per-card keywords → unique Booking.com results per card
+        budget_keyword = "budget" if amount < 50 else ("luxury" if amount >= 150 else "")
+        keywords = " ".join([a["title"], " ".join(a["tags"]), "hotel", budget_keyword]).strip()
+
+        link = deeplink_booking_with_keywords(
+            city=city,
+            area=area_txt or None,
+            keywords=keywords,
+            checkin=start,
+            checkout=end,
+            adults=adults
+        )
 
         out.append({
             "title": a["title"],
             "why": " • ".join(why),
             "tags": a["tags"],
-            "link": deeplink_booking(base_query, start, end, adults)
+            "link": link
         })
     return out
 
 # =========================================================
-# Personalized Itinerary Builder (with real POIs)
+# Itinerary builder (uses real POIs)
 # =========================================================
 
 def assemble_itinerary(lat, lon, city, area, start_date, end_date, interests, amount):
     days = max((end_date - start_date).days, 1)
     profile = budget_profile(amount)
     museums_per_day = profile["museums_per_day"]
-    food_style = profile["food_style"]  # cheap / mid / fine
+    food_style = profile["food_style"]
 
-    # Fetch pools of places (once)
     pools = {}
     for k in ["landmark", "museum", "park", "cafe", "restaurant", "viewpoint"]:
         pools[k] = fetch_pois(lat, lon, radius_m=3000, kind=k, limit=50)
 
-    # Heuristics for food style: prefer café vs restaurant
     def pick_food(used, origin):
         if food_style == "cheap":
-            # prioritize cafés
-            picks = pick_unique(pools["cafe"], 1, used, origin)
-            if not picks:
-                picks = pick_unique(pools["restaurant"], 1, used, origin)
+            picks = pick_unique(pools["cafe"], 1, used, origin) or pick_unique(pools["restaurant"], 1, used, origin)
         elif food_style == "mid":
-            # mix
             picks = pick_unique(pools["restaurant"], 1, used, origin) or pick_unique(pools["cafe"], 1, used, origin)
         else:
-            # fine -> restaurant first
             picks = pick_unique(pools["restaurant"], 1, used, origin) or pick_unique(pools["cafe"], 1, used, origin)
         return picks
 
-    # Build days
     used_names = set()
     origin = (lat, lon)
     days_out = []
-    for d in range(days):
+    for _ in range(days):
         morning = []
         afternoon = []
         evening = []
 
-        # Morning: 1 landmark + optional museum (budget allows)
         morning += pick_unique(pools["landmark"], 1, used_names, origin)
         if museums_per_day >= 1:
             morning += pick_unique(pools["museum"], 1, used_names, origin)
 
-        # Afternoon: park + café/restaurant
         afternoon += pick_unique(pools["park"], 1, used_names, origin)
         afternoon += pick_food(used_names, origin)
 
-        # Evening: viewpoint or landmark + restaurant/café
-        ev_view = pick_unique(pools["viewpoint"], 1, used_names, origin)
-        if not ev_view:
-            ev_view = pick_unique(pools["landmark"], 1, used_names, origin)
+        ev_view = pick_unique(pools["viewpoint"], 1, used_names, origin) or pick_unique(pools["landmark"], 1, used_names, origin)
         evening += ev_view
         evening += pick_food(used_names, origin)
 
-        day_plan = {
-            "Morning": morning,
-            "Afternoon": afternoon,
-            "Evening": evening
-        }
-        days_out.append(day_plan)
+        days_out.append({"Morning": morning, "Afternoon": afternoon, "Evening": evening})
 
     header = f"## {city}" + (f" ({area})" if area else "") + f" — {days}-Day Itinerary"
     return header, days_out
@@ -369,7 +335,7 @@ def render_itinerary_markdown(header, days_plan):
     return "\n".join(lines)
 
 # =========================================================
-# User history (per-user via st.experimental_user)
+# User history via st.experimental_user
 # =========================================================
 
 def get_user_id():
@@ -377,8 +343,7 @@ def get_user_id():
         user = st.experimental_user or {}
     except Exception:
         user = {}
-    uid = user.get("id") or "guest"
-    return str(uid)
+    return str(user.get("id") or "guest")
 
 def get_user_history(uid: str):
     if "history" not in st.session_state:
@@ -399,7 +364,6 @@ def derive_interest_bias(uid: str) -> set[str]:
         for i in trip.get("interests", []):
             k = i.lower()
             freq[k] = freq.get(k, 0) + 1
-    # take top 3 interests as bias
     top = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:3]
     return set(k for k, _ in top)
 
@@ -421,20 +385,17 @@ with st.sidebar:
         end_date = st.date_input("End date", value=date.today() + timedelta(days=18))
     adults = st.number_input("Adults", min_value=1, max_value=10, value=2, step=1)
     budget_amount = st.number_input("Budget ($/day)", min_value=10, max_value=1000, value=100, step=5)
-
     interests = st.multiselect(
         "Interests",
         ["food","history","museums","nature","nightlife","architecture","shopping","family"],
         default=["food","history"]
     )
-
     go = st.button("✨ Build Personalized Plan")
 
 uid = get_user_id()
 st.caption(f"User: `{uid}`")
 
 if go:
-    # Basic validations
     if not city:
         st.error("Please enter a destination city.")
         st.stop()
@@ -442,7 +403,6 @@ if go:
         st.error("End date must be after Start date.")
         st.stop()
 
-    # Geocode the specific area if given, else the city
     q = combined_query(city, area or None)
     geo = geocode_osm(q) or geocode_osm(city)
     if not geo:
@@ -451,24 +411,23 @@ if go:
 
     st.caption(f"📍 {geo['name']}  ({geo['lat']:.4f}, {geo['lon']:.4f})")
 
-    # Build itinerary with real POIs
     with st.status("Finding nearby places & crafting itinerary...", expanded=False):
         header, days_plan = assemble_itinerary(
             geo["lat"], geo["lon"], city, (area or "").strip(),
-            start_date, end_date, interests, budget_amount
+            start_date, end_date, interests, int(budget_amount)
         )
+
     st.subheader("🗓️ Your Itinerary")
     st.markdown(render_itinerary_markdown(header, days_plan))
 
-    # Budget summary (once, at the end)
     st.markdown(budget_notes(int(budget_amount)))
     st.caption("*Note: flight & visa costs are not included.*")
 
-    # Personalized hotel archetype suggestions (offline)
     user_bias = derive_interest_bias(uid)
     st.subheader("🏨 Recommended Places to Stay (Personalized)")
     hotel_cards = synthesize_hotel_cards(
-        city, (area or None), start_date, end_date, adults, interests, int(budget_amount), user_bias, k=8
+        city, (area or None), start_date, end_date, adults,
+        interests, int(budget_amount), user_bias, k=8
     )
     for c in hotel_cards:
         with st.container(border=True):
@@ -477,7 +436,12 @@ if go:
             st.write("Tags:", ", ".join(c["tags"]))
             st.link_button("Open on Booking.com", c["link"])
 
-    # Save trip to history
+    # Global city/area link (generic)
+    st.link_button(
+        "🔗 See full results on Booking.com",
+        deeplink_booking_city(q, start_date, end_date, adults)
+    )
+
     add_history(uid, {
         "city": city,
         "area": (area or "").strip(),
@@ -488,23 +452,21 @@ if go:
         "interests": interests
     })
 
-    # Export
     pkg = {
         "itinerary_header": header,
         "itinerary": days_plan,
         "budget_per_day": int(budget_amount),
         "budget_notes": budget_notes(int(budget_amount)),
         "stay_recommendations": hotel_cards,
-        "deeplink_city": deeplink_booking(q, start_date, end_date, adults)
+        "deeplink_city": deeplink_booking_city(q, start_date, end_date, adults)
     }
     st.download_button("⬇️ Download Plan (JSON)",
                        data=json.dumps(pkg, ensure_ascii=False, indent=2),
                        file_name=f"montravels_{city.lower().replace(' ','_')}.json",
                        mime="application/json")
 
-    # Show history
     st.subheader("🧠 Your Saved History (Private to this user)")
     st.json(get_user_history(uid))
 
 else:
-    st.info("Enter a city (and optional area), choose dates & budget, select interests, then click **Build Personalized Plan**.")
+    st.info("Enter a city (and optional area), pick dates & budget, select interests, then click **Build Personalized Plan**.")
