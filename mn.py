@@ -1,5 +1,7 @@
 import math
 import json
+import time
+import hashlib
 from datetime import date, timedelta
 import urllib.parse
 import requests
@@ -20,30 +22,52 @@ def haversine_km(lat1, lon1, lat2, lon2):
 def combined_query(city: str, area: str | None) -> str:
     return (f"{city} {area}".strip() if area else city).strip()
 
+def _cachebuster(seed: str) -> str:
+    # unique per card/click; Booking ignores unknown params but this breaks SPA caching
+    raw = f"{seed}-{time.time_ns()}"
+    return hashlib.md5(raw.encode()).hexdigest()[:10]
+
 def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adults: int = 2):
     q = urllib.parse.quote(city_or_area)
-    return (
+    u = (
         "https://www.booking.com/searchresults.html"
-        f"?ss={q}&checkin={checkin:%Y-%m-%d}&checkout={checkout:%Y-%m-%d}"
+        f"?ss={q}"
+        f"&ssne={q}&ssne_untouched=1"
+        f"&checkin={checkin:%Y-%m-%d}"
+        f"&checkout={checkout:%Y-%m-%d}"
         f"&group_adults={adults}&no_rooms=1&group_children=0"
+        f"&lang=en-us&src=index&sb=1&nflt="
+        f"&_mtu={_cachebuster(city_or_area)}"
     )
+    return u
 
 def deeplink_booking_with_keywords(city: str, area: str | None, keywords: str,
                                    checkin: date, checkout: date, adults: int = 2):
-    """
-    Per-card keyworded query so each link returns different results.
-    Example keywords: "Boutique near Old Town walkable character hotel"
-    """
     parts = [city]
     if area:
         parts.append(area)
     if keywords:
         parts.append(keywords)
-    ss = urllib.parse.quote(" ".join(parts).strip())
-    return (
+    ss_raw = " ".join(parts).strip()
+    ss = urllib.parse.quote(ss_raw)
+    u = (
         "https://www.booking.com/searchresults.html"
-        f"?ss={ss}&checkin={checkin:%Y-%m-%d}&checkout={checkout:%Y-%m-%d}"
+        f"?ss={ss}"
+        f"&ssne={ss}&ssne_untouched=1"
+        f"&checkin={checkin:%Y-%m-%d}"
+        f"&checkout={checkout:%Y-%m-%d}"
         f"&group_adults={adults}&no_rooms=1&group_children=0"
+        f"&lang=en-us&src=index&sb=1&nflt="
+        f"&_mtu={_cachebuster(ss_raw)}"
+    )
+    return u
+
+def external_link_button(label: str, url: str):
+    # Force open in a new tab so Booking's SPA state can't hijack next clicks
+    st.markdown(
+        f'<a target="_blank" rel="noopener" href="{url}" '
+        f'style="text-decoration:none;"><button class="stButton">{label}</button></a>',
+        unsafe_allow_html=True
     )
 
 # =========================================================
@@ -434,10 +458,10 @@ if go:
             st.markdown(f"**{c['title']}**")
             st.caption(c["why"])
             st.write("Tags:", ", ".join(c["tags"]))
-            st.link_button("Open on Booking.com", c["link"])
+            external_link_button("Open on Booking.com", c["link"])  # open in new tab + cache-busted
 
     # Global city/area link (generic)
-    st.link_button(
+    external_link_button(
         "🔗 See full results on Booking.com",
         deeplink_booking_city(q, start_date, end_date, adults)
     )
