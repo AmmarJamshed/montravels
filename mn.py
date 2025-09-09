@@ -22,39 +22,89 @@ def apply_pokemon_theme():
             font-family: 'Trebuchet MS', sans-serif;
             color: #2C2C2C;
         }
+
         /* Headings */
         h1 {
-            color: #FFCC00;            /* Pikachu yellow */
-            text-shadow: 2px 2px 0px #3B4CCA;  /* Pokémon blue outline */
+            color: #FFCC00;                      /* Pikachu yellow */
+            text-shadow: 2px 2px 0px #3B4CCA;    /* Pokémon blue outline */
         }
-        h2, h3 {
-            color: #3B4CCA;
-        }
-        /* Sidebar */
+        h2, h3 { color: #3B4CCA; }
+
+        /* ===== Sidebar ===== */
         section[data-testid="stSidebar"] {
             background-color: #3B4CCA;
             color: white;
         }
-        section[data-testid="stSidebar"] * {
+        /* Headings / labels in sidebar */
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] span[role="img"] {
             color: white !important;
         }
-        /* Buttons (Streamlit + custom <a><button>) */
-        a > button, div.stButton > button {
-            background-color: #FF1C1C; /* Poké-ball red */
+        /* Inputs & text inside form controls -> dark so it's readable */
+        section[data-testid="stSidebar"] input,
+        section[data-testid="stSidebar"] textarea,
+        section[data-testid="stSidebar"] select,
+        section[data-testid="stSidebar"] .stTextInput input,
+        section[data-testid="stSidebar"] .stNumberInput input,
+        section[data-testid="stSidebar"] .stDateInput input,
+        section[data-testid="stSidebar"] .stMultiSelect input {
+            color: #111 !important;
+            background-color: #F0F3FF !important;
+            border-radius: 10px !important;
+        }
+        /* Multiselect chosen chips */
+        section[data-testid="stSidebar"] div[data-baseweb="tag"] {
+            background: #FFCC00 !important;
+            color: #2C2C2C !important;
+            border-radius: 10px !important;
+            font-weight: 600;
+        }
+        /* Placeholder text */
+        section[data-testid="stSidebar"] ::placeholder {
+            color: #2C2C2C !important;
+            opacity: 0.8;
+        }
+
+        /* ===== Buttons / links ===== */
+        /* Use anchors styled like buttons (valid HTML) */
+        .btn-link {
+            display: inline-block;
+            background-color: #FF1C1C;    /* Poké-ball red */
+            color: #FFFFFF !important;
+            border-radius: 12px;
+            border: 2px solid #3B4CCA;
+            font-weight: bold;
+            transition: 0.3s;
+            padding: 8px 14px;
+            text-decoration: none !important;
+            cursor: pointer;
+        }
+        .btn-link:hover {
+            background-color: #FFCC00;
+            color: #2C2C2C !important;
+            border-color: #FF1C1C;
+        }
+
+        /* Streamlit native buttons */
+        div.stButton > button {
+            background-color: #FF1C1C;
             color: white;
             border-radius: 12px;
             border: 2px solid #3B4CCA;
             font-weight: bold;
             transition: 0.3s;
-            padding: 6px 12px;
-            cursor: pointer;
+            padding: 8px 14px;
         }
-        a > button:hover, div.stButton > button:hover {
+        div.stButton > button:hover {
             background-color: #FFCC00;
             color: #2C2C2C;
             border: 2px solid #FF1C1C;
         }
-        /* Card-ish containers (used via st.container(border=True)) */
+
+        /* Card-ish container */
         .pokecard {
             background-color: #FFFFFF;
             border-radius: 16px;
@@ -63,22 +113,15 @@ def apply_pokemon_theme():
             border: 2px solid #FFCC00;
             box-shadow: 2px 2px 6px rgba(0,0,0,0.1);
         }
-        /* Links */
-        a {
-            color: #3B4CCA;
-            text-decoration: none;
-            font-weight: bold;
-        }
-        a:hover {
-            color: #FF1C1C;
-        }
+
+        /* Links in body */
+        a { color: #3B4CCA; font-weight: bold; text-decoration: none; }
+        a:hover { color: #FF1C1C; }
+
         /* Captions / notes */
-        .stCaption, span[data-baseweb="tag"] {
-            color: #4CAF50 !important;
-        }
+        .stCaption, span[data-baseweb="tag"] { color: #4CAF50 !important; }
         </style>
     """, unsafe_allow_html=True)
-
 
 # =========================================================
 # Utilities
@@ -103,7 +146,6 @@ def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adul
     return (
         "https://www.booking.com/searchresults.html"
         f"?ss={q}"
-        f"&ssne={q}&ssne_untouched=1"
         f"&checkin={checkin:%Y-%m-%d}"
         f"&checkout={checkout:%Y-%m-%d}"
         f"&group_adults={adults}&no_rooms=1&group_children=0"
@@ -113,6 +155,7 @@ def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adul
 
 def deeplink_booking_with_keywords(city: str, area: Optional[str], keywords: str,
                                    checkin: date, checkout: date, adults: int = 2) -> str:
+    # Softer keywording → more reliable results
     parts: List[str] = [city]
     if area:
         parts.append(area)
@@ -123,7 +166,6 @@ def deeplink_booking_with_keywords(city: str, area: Optional[str], keywords: str
     return (
         "https://www.booking.com/searchresults.html"
         f"?ss={ss}"
-        f"&ssne={ss}&ssne_untouched=1"
         f"&checkin={checkin:%Y-%m-%d}"
         f"&checkout={checkout:%Y-%m-%d}"
         f"&group_adults={adults}&no_rooms=1&group_children=0"
@@ -132,13 +174,11 @@ def deeplink_booking_with_keywords(city: str, area: Optional[str], keywords: str
     )
 
 def external_link_button(label: str, url: str):
-    # Open in new tab to avoid Booking SPA state persisting across clicks
+    # Valid, reliable, styled anchor (no nested <button>)
     st.markdown(
-        f'<a target="_blank" rel="noopener" href="{url}" '
-        f'style="text-decoration:none;"><button>{label}</button></a>',
+        f'<a class="btn-link" target="_blank" rel="noopener" href="{url}">{label}</a>',
         unsafe_allow_html=True
     )
-
 
 # =========================================================
 # Geocoding & POIs (OpenStreetMap)
@@ -241,7 +281,6 @@ def pick_unique(pois: List[Dict[str, Any]], n: int, used_names: Set[str], origin
         used_names.add(c["name"])
     return chosen
 
-
 # =========================================================
 # Budget (amount/day)
 # =========================================================
@@ -275,7 +314,6 @@ def budget_profile(amount: int) -> Dict[str, Any]:
         return {"museums_per_day": 1, "food_style": "mid"}
     else:
         return {"museums_per_day": 2, "food_style": "fine"}
-
 
 # =========================================================
 # Hotel recommender (offline archetypes) + personalization
@@ -313,14 +351,11 @@ def score_archetype(arch: Dict[str, Any], interests: List[str], amount: int,
     if area_hint:
         a = area_hint.lower()
         if any(x in a for x in ["old", "historic", "city", "downtown", "bazaar"]):
-            if arch["key"] in {"historic-boutique","central-midscale","design-hotel"}:
-                score += 1.2
+            if arch["key"] in {"historic-boutique","central-midscale","design-hotel"}: score += 1.2
         if any(x in a for x in ["beach", "bay", "marina", "park", "water", "lake", "river"]):
-            if arch["key"] in {"waterfront-view","family-aparthotel"}:
-                score += 1.2
+            if arch["key"] in {"waterfront-view","family-aparthotel"}: score += 1.2
         if any(x in a for x in ["night", "soho", "party", "club"]):
-            if arch["key"] in {"trendy-nightlife","design-hotel"}:
-                score += 1.2
+            if arch["key"] in {"trendy-nightlife","design-hotel"}: score += 1.2
     return score
 
 def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: date,
@@ -348,8 +383,8 @@ def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: dat
         elif amount < 150:   why.append("budget: mid")
         else:                why.append("budget: premium")
 
-        budget_keyword = "budget" if amount < 50 else ("luxury" if amount >= 150 else "")
-        keywords = " ".join([a["title"], " ".join(a["tags"]), "hotel", budget_keyword]).strip()
+        # Simpler, reliable keywords
+        keywords = " ".join([a["title"], "hotel"]).strip()
 
         link = deeplink_booking_with_keywords(
             city=city,
@@ -367,7 +402,6 @@ def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: dat
             "link": link
         })
     return out
-
 
 # =========================================================
 # Itinerary builder (uses real POIs)
@@ -429,12 +463,10 @@ def render_itinerary_markdown(header: str, days_plan: List[Dict[str, Any]]) -> s
             lines.append(f"- **{part}**: {names}")
     return "\n".join(lines)
 
-
 # =========================================================
 # User history (session-only)
 # =========================================================
 def get_user_id() -> str:
-    # Works locally too; falls back to "guest"
     try:
         user = st.experimental_user or {}
     except Exception:
@@ -463,12 +495,11 @@ def derive_interest_bias(uid: str) -> Set[str]:
     top = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:3]
     return set(k for k, _ in top)
 
-
 # =========================================================
 # UI
 # =========================================================
 st.set_page_config(page_title="MonTravels — Personalized Planner", page_icon="🧭", layout="wide")
-apply_pokemon_theme()   # ✅ Apply Pokémon theme
+apply_pokemon_theme()
 
 st.title("🧭 MonTravels")
 
@@ -528,13 +559,12 @@ if go:
         interests, int(budget_amount), user_bias, k=8
     )
     for c in hotel_cards:
-        # add a nice card wrapper
         with st.container(border=True):
             st.markdown('<div class="pokecard">', unsafe_allow_html=True)
             st.markdown(f"**{c['title']}**")
             st.caption(c["why"])
             st.write("Tags:", ", ".join(c["tags"]))
-            external_link_button("Open on Booking.com", c["link"])  # opens in new tab + cache-busted
+            external_link_button("Open on Booking.com", c["link"])
             st.markdown('</div>', unsafe_allow_html=True)
 
     # Global city/area link (generic)
