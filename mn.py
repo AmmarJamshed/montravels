@@ -364,7 +364,7 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
         "allowed_place_names": osm_names
     }
 
-    MODEL_CANDIDATE = os.getenv("OPENAI_TRAVEL_MODEL", "gpt-4o")  # override via env if needed
+    MODEL_CANDIDATE = os.getenv("OPENAI_TRAVEL_MODEL", "gpt-4")  # override via env if needed
 
     def _call_chat(response_format: Optional[Dict]):
         return client.chat.completions.create(
