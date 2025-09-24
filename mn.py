@@ -9,14 +9,12 @@ import urllib.parse
 import requests
 import streamlit as st
 
-# === NEW: OpenAI client ===
+# === OpenAI client (modern SDK) ===
 try:
     from openai import OpenAI
 except ImportError:
-    # helpful message if package missing
-    st.warning("Install the OpenAI SDK first:  pip install openai")
-    class OpenAI:  # placeholder to avoid NameError before install
-        def __init__(self,*args,**kwargs): pass
+    # If the SDK isn't installed yet, we'll warn at runtime.
+    OpenAI = None
 
 # =========================================================
 # THEME (Pokémon-inspired Travel Guide)
@@ -178,7 +176,7 @@ def pick_unique(pois: List[Dict], n: int, used: Set[str], origin: Tuple[float,fl
     return chosen
 
 # =========================================================
-# Budget
+# Budget helpers
 # =========================================================
 def budget_notes(amount: int) -> str:
     if amount < 50: return f"**Budget (~${amount}/day)**\n- Street food, public transport, free sights."
@@ -213,10 +211,50 @@ def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: dat
     return out
 
 # =========================================================
-# NEW: OpenAI-backed itinerary synthesis (structured output)
+# Local heuristic itinerary (fallback)
+# =========================================================
+def assemble_itinerary(lat,lon,city,area,start,end,interests,amount):
+    days=max((end-start).days,1)
+    pools={k:fetch_pois(lat,lon,3000,k,50) for k in ["landmark","museum","park","cafe","restaurant","viewpoint"]}
+    used=set(); origin=(lat,lon); out=[]
+    for _ in range(days):
+        out.append({
+            "Morning":pick_unique(pools["landmark"],1,used,origin),
+            "Afternoon":pick_unique(pools["park"],1,used,origin),
+            "Evening":pick_unique(pools["restaurant"],1,used,origin)
+        })
+    return f"## {city} Itinerary ({days} days)",out
+
+def render_itinerary(header,days_plan):
+    lines=[header]
+    for i,slots in enumerate(days_plan,1):
+        lines.append(f"### Day {i}")
+        for part,items in slots.items():
+            if items: lines.append(f"- **{part}**: {', '.join(p['name'] for p in items)}")
+    return "\n".join(lines)
+
+# =========================================================
+# User history
+# =========================================================
+def get_user_id():
+    try: return str((st.experimental_user or {}).get("id") or "guest")
+    except: return "guest"
+
+def get_user_history(uid): return st.session_state.setdefault("history",{}).setdefault(uid,[])
+def add_history(uid,rec): get_user_history(uid).append(rec)
+def derive_interest_bias(uid):
+    freq={}; 
+    for trip in get_user_history(uid):
+        for i in trip.get("interests",[]): freq[i]=freq.get(i,0)+1
+    return set(sorted(freq,key=freq.get,reverse=True)[:3])
+
+# =========================================================
+# OpenAI helpers (Chat Completions + JSON Schema)
 # =========================================================
 def get_openai_client() -> Optional[OpenAI]:
-    # prefer st.secrets, fall back to env var
+    if OpenAI is None:
+        st.warning("OpenAI SDK not installed. Run:  pip install openai")
+        return None
     key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
     key = key or os.getenv("OPENAI_API_KEY")
     if not key:
@@ -229,7 +267,7 @@ def get_openai_client() -> Optional[OpenAI]:
         return None
 
 def _osm_catalog(lat: float, lon: float) -> Dict[str, List[Dict]]:
-    # Gather a small, realistic pool near the center to ground the model
+    # Gather a pool near the center to ground the model
     pools = {
         "landmarks": fetch_pois(lat, lon, 4000, "landmark", 80),
         "museums":   fetch_pois(lat, lon, 4000, "museum", 40),
@@ -285,18 +323,20 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
                     "type":"object",
                     "properties":{
                         "Morning":{"type":"array","items":{"type":"object","properties":{
-                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}},"required":["name"]}},
+                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}},
                         "Afternoon":{"type":"array","items":{"type":"object","properties":{
-                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}},"required":["name"]}},
+                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}},
                         "Evening":{"type":"array","items":{"type":"object","properties":{
-                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}},"required":["name"]}}
+                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}}
                     },
-                    "required":["Morning","Afternoon","Evening"]
+                    "required":["Morning","Afternoon","Evening"],
+                    "additionalProperties": False
                 }
             },
             "notes":{"type":"string"}
         },
-        "required":["days"]
+        "required":["days"],
+        "additionalProperties": False
     }
 
     budget_band = (
@@ -305,43 +345,41 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
         "premium"
     )
 
-    # Responses API: ask for JSON that only uses places present in osm_names
     try:
-        resp = client.responses.create(
+        comp = client.chat.completions.create(
             model="gpt-4o-mini",
-            # You can swap to a newer small model when available (e.g., "gpt-5-mini")
-            input=[{
-                "role": "user",
-                "content": [
-                    {"type":"text","text":(
-                        "You are a travel planner. Build a realistic, walkable itinerary using ONLY places from the provided list. "
-                        "Match the user's budget band and interests. Allocate free/low-cost items for 'shoestring', balanced picks for 'moderate', "
-                        "and paid experiences for 'premium'. Prefer short travel hops. Avoid duplicates across days. "
-                        "Return JSON following the provided schema. Do not include places not in the list."
-                    )},
-                    {"type":"input_text","text":json.dumps({
-                        "city": city, "area": area, "days": days,
-                        "budget_band": budget_band,
-                        "interests": interests,
-                        "allowed_place_names": osm_names
-                    }, ensure_ascii=False)}
-                ]
-            }],
-            json_schema={"name":"itinerary_schema","schema":schema,"strict":True},
-            # modest tokens to keep latency/cost sane
-            max_output_tokens=2000,
+            messages=[
+                {"role": "system", "content": (
+                    "You are a practical travel planner. Build a realistic, walkable itinerary using ONLY places "
+                    "from the provided list. Match the user's budget band and interests. Allocate free/low-cost items "
+                    "for 'shoestring', balanced picks for 'moderate', and paid experiences for 'premium'. "
+                    "Prefer short travel hops. Avoid duplicates across days."
+                )},
+                {"role": "user", "content": json.dumps({
+                    "city": city, "area": area, "days": days,
+                    "budget_band": budget_band,
+                    "interests": interests,
+                    "allowed_place_names": osm_names
+                }, ensure_ascii=False)}
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "itinerary_schema",
+                    "strict": True,
+                    "schema": schema
+                }
+            },
             temperature=0.4,
+            max_tokens=2000,
         )
-        # Extract structured JSON from Responses API
-        data = resp.output_parsed if hasattr(resp, "output_parsed") else None
-        if not data:
-            # Defensive parse (SDKs may return text)
-            text_out = getattr(resp, "output_text", None) or json.dumps(getattr(resp, "output", {}))
-            data = json.loads(text_out)
-        model_days = data.get("days", [])
-        grounded = _ground_and_prune(model_days, set(osm_names))
 
-        # If grounding removed too much, fall back
+        # With json_schema, we should receive valid JSON
+        raw = comp.choices[0].message.content
+        data = json.loads(raw)
+        model_days = data.get("days", [])
+
+        grounded = _ground_and_prune(model_days, set(osm_names))
         if not grounded or all(not any(v for v in d.values()) for d in grounded):
             return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
 
@@ -359,44 +397,6 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
     except Exception as e:
         st.warning(f"OpenAI plan generation failed ({e}); using local fallback.")
         return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
-
-# =========================================================
-# Legacy local itinerary (kept as fallback)
-# =========================================================
-def assemble_itinerary(lat,lon,city,area,start,end,interests,amount):
-    days=max((end-start).days,1)
-    pools={k:fetch_pois(lat,lon,3000,k,50) for k in ["landmark","museum","park","cafe","restaurant","viewpoint"]}
-    used=set(); origin=(lat,lon); out=[]
-    for _ in range(days):
-        out.append({
-            "Morning":pick_unique(pools["landmark"],1,used,origin),
-            "Afternoon":pick_unique(pools["park"],1,used,origin),
-            "Evening":pick_unique(pools["restaurant"],1,used,origin)
-        })
-    return f"## {city} Itinerary ({days} days)",out
-
-def render_itinerary(header,days_plan):
-    lines=[header]
-    for i,slots in enumerate(days_plan,1):
-        lines.append(f"### Day {i}")
-        for part,items in slots.items():
-            if items: lines.append(f"- **{part}**: {', '.join(p['name'] for p in items)}")
-    return "\n".join(lines)
-
-# =========================================================
-# User history
-# =========================================================
-def get_user_id():
-    try: return str((st.experimental_user or {}).get("id") or "guest")
-    except: return "guest"
-
-def get_user_history(uid): return st.session_state.setdefault("history",{}).setdefault(uid,[])
-def add_history(uid,rec): get_user_history(uid).append(rec)
-def derive_interest_bias(uid):
-    freq={}; 
-    for trip in get_user_history(uid):
-        for i in trip.get("interests",[]): freq[i]=freq.get(i,0)+1
-    return set(sorted(freq,key=freq.get,reverse=True)[:3])
 
 # =========================================================
 # UI
@@ -420,11 +420,13 @@ uid=get_user_id()
 st.caption(f"User: `{uid}`")
 
 if go:
-    if not city: st.error("Enter a city."); st.stop()
+    if not city:
+        st.error("Enter a city."); st.stop()
     geo=geocode_osm(combined_query(city,area) or city)
-    if not geo: st.error("Could not geocode."); st.stop()
+    if not geo:
+        st.error("Could not geocode."); st.stop()
 
-    # === NEW: model-assisted plan (grounded on OSM & budget-aware) ===
+    # Model-assisted plan (grounded on OSM & budget-aware)
     header,days_plan=generate_itinerary_with_openai(
         city=city, area=area, start=start_date, end=end_date,
         lat=geo["lat"], lon=geo["lon"],
@@ -451,7 +453,7 @@ if go:
 
     with col2:
         agents=[{"name":"GlobeTrek Tours","desc":"Cultural & family packages","email":"info@globetrek.com","link":"https://globetrek.example.com"},
-                {"name":"SkyHigh Travels","desc":"Custom itineraries & visa support","email":"bookings@skyhightravels.com","link":"https://skyhigh.example.com"}]
+                {"name":"SkyHigh Travels","desc":"Custom itineraries & visa support","email":"bookings@skyhigh.example.com","link":"https://skyhigh.example.com"}]
         summary=f"Destination: {city}\nDates: {start_date}→{end_date}\nBudget:${budget}/day\nAdults:{adults}\nInterests:{', '.join(interests)}"
         for a in agents:
             with st.container(border=True):
