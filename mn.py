@@ -13,8 +13,7 @@ import streamlit as st
 try:
     from openai import OpenAI
 except ImportError:
-    # If the SDK isn't installed yet, we'll warn at runtime.
-    OpenAI = None
+    OpenAI = None  # We'll warn at runtime if missing
 
 # =========================================================
 # THEME (Pokémon-inspired Travel Guide)
@@ -249,7 +248,7 @@ def derive_interest_bias(uid):
     return set(sorted(freq,key=freq.get,reverse=True)[:3])
 
 # =========================================================
-# OpenAI helpers (Chat Completions + JSON Schema)
+# OpenAI helpers (Chat Completions with smart fallback)
 # =========================================================
 def get_openai_client() -> Optional[OpenAI]:
     if OpenAI is None:
@@ -259,9 +258,8 @@ def get_openai_client() -> Optional[OpenAI]:
     key = key or os.getenv("OPENAI_API_KEY")
     if not key:
         return None
-    os.environ["OPENAI_API_KEY"] = key  # SDK reads from env
     try:
-        return OpenAI()
+        return OpenAI(api_key=key)
     except Exception as e:
         st.error(f"OpenAI client error: {e}")
         return None
@@ -300,96 +298,141 @@ def _ground_and_prune(model_days: List[Dict], osm_names: Set[str]) -> List[Dict]
         pruned.append(clean)
     return pruned
 
+# --- helper: coerce/validate model JSON into expected shape
+def _coerce_to_schema(data: Dict) -> Dict:
+    """Ensure data matches:
+       {"days":[{"Morning":[{name,why?,est_cost_usd?}], "Afternoon":[...], "Evening":[...]}], "notes"?: str}
+       Anything extra is ignored; missing keys are created empty.
+    """
+    out = {"days": [], "notes": ""}
+    if not isinstance(data, dict):
+        return out
+
+    notes = data.get("notes")
+    if isinstance(notes, str):
+        out["notes"] = notes
+
+    days = data.get("days", [])
+    if not isinstance(days, list):
+        return out
+
+    def _norm_slot(items):
+        norm = []
+        if isinstance(items, list):
+            for it in items:
+                if isinstance(it, dict) and isinstance(it.get("name"), str) and it["name"].strip():
+                    o = {"name": it["name"].strip()}
+                    if isinstance(it.get("why"), str): o["why"] = it["why"]
+                    if isinstance(it.get("est_cost_usd"), (int, float)): o["est_cost_usd"] = float(it["est_cost_usd"])
+                    norm.append(o)
+        return norm
+
+    for d in days:
+        if not isinstance(d, dict): 
+            continue
+        out["days"].append({
+            "Morning":  _norm_slot(d.get("Morning", [])),
+            "Afternoon":_norm_slot(d.get("Afternoon", [])),
+            "Evening":  _norm_slot(d.get("Evening", [])),
+        })
+    return out
+
 def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, end: date,
                                    lat: float, lon: float, interests: List[str], amount: int) -> Tuple[str, List[Dict]]:
     client = get_openai_client()
     days = max((end - start).days, 1)
 
-    # Fallback to local assembly if no key available
     if client is None:
         st.info("OpenAI key not found — using local heuristic itinerary.")
         return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
 
     catalog = _osm_catalog(lat, lon)
-    osm_names = sorted(list(_as_name_set(catalog)))[:800]  # cap tokens
+    osm_names = sorted(list(_as_name_set(catalog)))[:800]
 
-    # Structured output schema the model must follow
-    schema = {
-        "type": "object",
-        "properties": {
-            "days": {
-                "type": "array",
-                "items": {
-                    "type":"object",
-                    "properties":{
-                        "Morning":{"type":"array","items":{"type":"object","properties":{
-                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}},
-                        "Afternoon":{"type":"array","items":{"type":"object","properties":{
-                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}},
-                        "Evening":{"type":"array","items":{"type":"object","properties":{
-                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}}
-                    },
-                    "required":["Morning","Afternoon","Evening"],
-                    "additionalProperties": False
-                }
-            },
-            "notes":{"type":"string"}
-        },
-        "required":["days"],
-        "additionalProperties": False
+    budget_band = "shoestring" if amount < 50 else "moderate" if amount < 150 else "premium"
+
+    system_msg = (
+        "You are a practical travel planner. Build a realistic, walkable itinerary using ONLY places "
+        "from the provided 'allowed_place_names' list. Match the user's budget band and interests. "
+        "Allocate free/low-cost items for 'shoestring', balanced picks for 'moderate', and paid experiences for 'premium'. "
+        "Prefer short travel hops. Avoid duplicates across days. Return strictly valid JSON."
+    )
+    user_payload = {
+        "city": city, "area": area, "days": days,
+        "budget_band": budget_band,
+        "interests": interests,
+        "allowed_place_names": osm_names
     }
 
-    budget_band = (
-        "shoestring" if amount < 50 else
-        "moderate" if amount < 150 else
-        "premium"
-    )
+    MODEL_CANDIDATE = os.getenv("OPENAI_TRAVEL_MODEL", "gpt-4o")  # override via env if needed
 
-    try:
-        comp = client.chat.completions.create(
-            model="gpt-4",
+    def _call_chat(response_format: Optional[Dict]):
+        return client.chat.completions.create(
+            model=MODEL_CANDIDATE,
             messages=[
-                {"role": "system", "content": (
-                    "You are a practical travel planner. Build a realistic, walkable itinerary using ONLY places "
-                    "from the provided list. Match the user's budget band and interests. Allocate free/low-cost items "
-                    "for 'shoestring', balanced picks for 'moderate', and paid experiences for 'premium'. "
-                    "Prefer short travel hops. Avoid duplicates across days."
-                )},
-                {"role": "user", "content": json.dumps({
-                    "city": city, "area": area, "days": days,
-                    "budget_band": budget_band,
-                    "interests": interests,
-                    "allowed_place_names": osm_names
-                }, ensure_ascii=False)}
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}
             ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "itinerary_schema",
-                    "strict": True,
-                    "schema": schema
-                }
-            },
+            response_format=response_format,   # None, {"type":"json_schema"}, or {"type":"json_object"}
             temperature=0.4,
             max_tokens=2000,
         )
 
-        # With json_schema, we should receive valid JSON
-        raw = comp.choices[0].message.content
-        data = json.loads(raw)
-        model_days = data.get("days", [])
+    try:
+        # First try strict schema (if model supports it)
+        schema = {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type":"array",
+                    "items":{
+                        "type":"object",
+                        "properties":{
+                            "Morning":{"type":"array","items":{"type":"object","properties":{
+                                "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}},
+                            "Afternoon":{"type":"array","items":{"type":"object","properties":{
+                                "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}},
+                            "Evening":{"type":"array","items":{"type":"object","properties":{
+                                "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}}
+                        },
+                        "required":["Morning","Afternoon","Evening"],
+                        "additionalProperties": False
+                    }
+                },
+                "notes":{"type":"string"}
+            },
+            "required":["days"],
+            "additionalProperties": False
+        }
 
+        try:
+            comp = _call_chat({
+                "type": "json_schema",
+                "json_schema": {"name": "itinerary_schema", "strict": True, "schema": schema}
+            })
+            raw = comp.choices[0].message.content
+            data = json.loads(raw)
+        except Exception:
+            # If model doesn't support json_schema, fall back to json_object
+            comp = _call_chat({"type": "json_object"})
+            raw = comp.choices[0].message.content
+            data = json.loads(raw)
+
+        # Coerce to expected shape and ground to OSM names
+        data = _coerce_to_schema(data)
+        model_days = data.get("days", [])
         grounded = _ground_and_prune(model_days, set(osm_names))
+
         if not grounded or all(not any(v for v in d.values()) for d in grounded):
             return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
 
-        # Convert to your existing rendering format
+        # Convert to rendering structure (1 pick per slot)
         out = []
         for d in grounded:
             out.append({
-                "Morning": [{"name": x["name"]} for x in d.get("Morning", [])][:1],
-                "Afternoon": [{"name": x["name"]} for x in d.get("Afternoon", [])][:1],
-                "Evening": [{"name": x["name"]} for x in d.get("Evening", [])][:1],
+                "Morning":  [{"name": x["name"]} for x in d.get("Morning",  [])][:1],
+                "Afternoon":[{"name": x["name"]} for x in d.get("Afternoon",[])][:1],
+                "Evening":  [{"name": x["name"]} for x in d.get("Evening",  [])][:1],
             })
         header = f"## {city} Itinerary ({days} days)"
         return header, out
