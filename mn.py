@@ -378,7 +378,7 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
         "allowed_place_names": osm_names
     }
 
-    MODEL = os.getenv("OPENAI_TRAVEL_MODEL", "gpt-4o")
+    MODEL = os.getenv("OPENAI_TRAVEL_MODEL", "gpt-4")
 
     try:
         comp = client.chat.completions.create(
