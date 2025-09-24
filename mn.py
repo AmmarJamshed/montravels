@@ -1,4 +1,5 @@
 import os
+import re
 import math
 import json
 import time
@@ -206,7 +207,7 @@ def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: dat
     out=[]
     for a in ranked[:k]:
         link=deeplink_booking_with_keywords(city,area,a["title"],start,end,adults)
-        out.append({"title":a["title"],"why":", ".join(a["good_for"]),"tags":a["tags"],"link":link})
+        out.append({"title":a["title"],"why":", ".join(a["good_for"]),"tags":a["tags"] , "link":link})
     return out
 
 # =========================================================
@@ -248,7 +249,7 @@ def derive_interest_bias(uid):
     return set(sorted(freq,key=freq.get,reverse=True)[:3])
 
 # =========================================================
-# OpenAI helpers (Chat Completions with smart fallback)
+# OpenAI helpers (no response_format; JSON enforced via prompt + parsing)
 # =========================================================
 def get_openai_client() -> Optional[OpenAI]:
     if OpenAI is None:
@@ -265,7 +266,6 @@ def get_openai_client() -> Optional[OpenAI]:
         return None
 
 def _osm_catalog(lat: float, lon: float) -> Dict[str, List[Dict]]:
-    # Gather a pool near the center to ground the model
     pools = {
         "landmarks": fetch_pois(lat, lon, 4000, "landmark", 80),
         "museums":   fetch_pois(lat, lon, 4000, "museum", 40),
@@ -284,7 +284,6 @@ def _as_name_set(catalog: Dict[str, List[Dict]]) -> Set[str]:
     return names
 
 def _ground_and_prune(model_days: List[Dict], osm_names: Set[str]) -> List[Dict]:
-    # Keep only items that appear in OSM name set (simple grounding)
     pruned = []
     for day in model_days:
         clean = {}
@@ -298,20 +297,42 @@ def _ground_and_prune(model_days: List[Dict], osm_names: Set[str]) -> List[Dict]
         pruned.append(clean)
     return pruned
 
-# --- helper: coerce/validate model JSON into expected shape
+def _extract_json(text: str) -> Dict:
+    """Extract JSON from raw LLM text: try direct parse, code fence, then broad {...} capture."""
+    if not text:
+        return {}
+    # Direct
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    # Code fences ```json ... ```
+    m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL|re.IGNORECASE)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    # Any first JSON object
+    m = re.search(r"(\{.*\})", text, flags=re.DOTALL)
+    if m:
+        s = m.group(1)
+        # Try to trim trailing code fence if present
+        s = s.split("```")[0]
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+    return {}
+
+# --- coerce/validate model JSON into expected shape
 def _coerce_to_schema(data: Dict) -> Dict:
-    """Ensure data matches:
-       {"days":[{"Morning":[{name,why?,est_cost_usd?}], "Afternoon":[...], "Evening":[...]}], "notes"?: str}
-       Anything extra is ignored; missing keys are created empty.
-    """
     out = {"days": [], "notes": ""}
     if not isinstance(data, dict):
         return out
-
     notes = data.get("notes")
     if isinstance(notes, str):
         out["notes"] = notes
-
     days = data.get("days", [])
     if not isinstance(days, list):
         return out
@@ -355,7 +376,8 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
         "You are a practical travel planner. Build a realistic, walkable itinerary using ONLY places "
         "from the provided 'allowed_place_names' list. Match the user's budget band and interests. "
         "Allocate free/low-cost items for 'shoestring', balanced picks for 'moderate', and paid experiences for 'premium'. "
-        "Prefer short travel hops. Avoid duplicates across days. Return strictly valid JSON."
+        "Prefer short travel hops. Avoid duplicates across days. "
+        "Return strictly valid JSON and nothing else. Do not include explanations."
     )
     user_payload = {
         "city": city, "area": area, "days": days,
@@ -364,61 +386,20 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
         "allowed_place_names": osm_names
     }
 
-    MODEL_CANDIDATE = os.getenv("OPENAI_TRAVEL_MODEL", "gpt-4")  # override via env if needed
+    MODEL = os.getenv("OPENAI_TRAVEL_MODEL", "gpt-4")  # override via env if needed
 
-    def _call_chat(response_format: Optional[Dict]):
-        return client.chat.completions.create(
-            model=MODEL_CANDIDATE,
+    try:
+        comp = client.chat.completions.create(
+            model=MODEL,
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}
             ],
-            response_format=response_format,   # None, {"type":"json_schema"}, or {"type":"json_object"}
             temperature=0.4,
             max_tokens=2000,
         )
-
-    try:
-        # First try strict schema (if model supports it)
-        schema = {
-            "type": "object",
-            "properties": {
-                "days": {
-                    "type":"array",
-                    "items":{
-                        "type":"object",
-                        "properties":{
-                            "Morning":{"type":"array","items":{"type":"object","properties":{
-                                "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}},
-                            "Afternoon":{"type":"array","items":{"type":"object","properties":{
-                                "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}},
-                            "Evening":{"type":"array","items":{"type":"object","properties":{
-                                "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}}, "required":["name"]}}
-                        },
-                        "required":["Morning","Afternoon","Evening"],
-                        "additionalProperties": False
-                    }
-                },
-                "notes":{"type":"string"}
-            },
-            "required":["days"],
-            "additionalProperties": False
-        }
-
-        try:
-            comp = _call_chat({
-                "type": "json_schema",
-                "json_schema": {"name": "itinerary_schema", "strict": True, "schema": schema}
-            })
-            raw = comp.choices[0].message.content
-            data = json.loads(raw)
-        except Exception:
-            # If model doesn't support json_schema, fall back to json_object
-            comp = _call_chat({"type": "json_object"})
-            raw = comp.choices[0].message.content
-            data = json.loads(raw)
-
-        # Coerce to expected shape and ground to OSM names
+        raw = comp.choices[0].message.content or ""
+        data = _extract_json(raw)
         data = _coerce_to_schema(data)
         model_days = data.get("days", [])
         grounded = _ground_and_prune(model_days, set(osm_names))
@@ -426,7 +407,6 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
         if not grounded or all(not any(v for v in d.values()) for d in grounded):
             return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
 
-        # Convert to rendering structure (1 pick per slot)
         out = []
         for d in grounded:
             out.append({
@@ -469,7 +449,6 @@ if go:
     if not geo:
         st.error("Could not geocode."); st.stop()
 
-    # Model-assisted plan (grounded on OSM & budget-aware)
     header,days_plan=generate_itinerary_with_openai(
         city=city, area=area, start=start_date, end=end_date,
         lat=geo["lat"], lon=geo["lon"],
@@ -480,7 +459,6 @@ if go:
     st.markdown(render_itinerary(header,days_plan))
     st.markdown(budget_notes(budget))
 
-    # ---- Side by side layout ----
     st.subheader("🏨 Places to Stay & ✈️ Travel Partners")
     col1,col2=st.columns([2,1])
 
