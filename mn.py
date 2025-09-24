@@ -347,7 +347,7 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
 
     try:
         comp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4",
             messages=[
                 {"role": "system", "content": (
                     "You are a practical travel planner. Build a realistic, walkable itinerary using ONLY places "
