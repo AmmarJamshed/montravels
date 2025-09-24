@@ -1,3 +1,4 @@
+import os
 import math
 import json
 import time
@@ -8,22 +9,25 @@ import urllib.parse
 import requests
 import streamlit as st
 
+# === NEW: OpenAI client ===
+try:
+    from openai import OpenAI
+except ImportError:
+    # helpful message if package missing
+    st.warning("Install the OpenAI SDK first:  pip install openai")
+    class OpenAI:  # placeholder to avoid NameError before install
+        def __init__(self,*args,**kwargs): pass
+
 # =========================================================
 # THEME (Pokémon-inspired Travel Guide)
 # =========================================================
 def apply_pokemon_theme():
     st.markdown("""
         <style>
-        .stApp {
-            background-color: #F5F7FA;
-            font-family: 'Trebuchet MS', sans-serif;
-            color: #2C2C2C;
-        }
+        .stApp { background-color: #F5F7FA; font-family: 'Trebuchet MS', sans-serif; color: #2C2C2C; }
         h1 { color: #FFCC00; text-shadow: 2px 2px 0px #3B4CCA; }
         h2, h3 { color: #3B4CCA; }
-        section[data-testid="stSidebar"] {
-            background-color: #3B4CCA; color: white;
-        }
+        section[data-testid="stSidebar"] { background-color: #3B4CCA; color: white; }
         section[data-testid="stSidebar"] h1, 
         section[data-testid="stSidebar"] h2, 
         section[data-testid="stSidebar"] h3, 
@@ -161,7 +165,8 @@ def fetch_pois(lat: float, lon: float, radius_m: int = 3000, kind: str = "landma
             if lat_ and lon_:
                 out.append({"name": name, "lat": float(lat_), "lon": float(lon_), "tags": tags})
         return out[:limit]
-    except Exception: return []
+    except Exception:
+        return []
 
 def pick_unique(pois: List[Dict], n: int, used: Set[str], origin: Tuple[float,float]) -> List[Dict]:
     if not pois: return []
@@ -208,7 +213,155 @@ def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: dat
     return out
 
 # =========================================================
-# Itinerary
+# NEW: OpenAI-backed itinerary synthesis (structured output)
+# =========================================================
+def get_openai_client() -> Optional[OpenAI]:
+    # prefer st.secrets, fall back to env var
+    key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
+    key = key or os.getenv("OPENAI_API_KEY")
+    if not key:
+        return None
+    os.environ["OPENAI_API_KEY"] = key  # SDK reads from env
+    try:
+        return OpenAI()
+    except Exception as e:
+        st.error(f"OpenAI client error: {e}")
+        return None
+
+def _osm_catalog(lat: float, lon: float) -> Dict[str, List[Dict]]:
+    # Gather a small, realistic pool near the center to ground the model
+    pools = {
+        "landmarks": fetch_pois(lat, lon, 4000, "landmark", 80),
+        "museums":   fetch_pois(lat, lon, 4000, "museum", 40),
+        "parks":     fetch_pois(lat, lon, 4000, "park", 40),
+        "restaurants": fetch_pois(lat, lon, 4000, "restaurant", 100),
+        "viewpoints":  fetch_pois(lat, lon, 6000, "viewpoint", 40),
+        "cafes":       fetch_pois(lat, lon, 3000, "cafe", 60),
+    }
+    return pools
+
+def _as_name_set(catalog: Dict[str, List[Dict]]) -> Set[str]:
+    names = set()
+    for arr in catalog.values():
+        for x in arr:
+            names.add(x["name"])
+    return names
+
+def _ground_and_prune(model_days: List[Dict], osm_names: Set[str]) -> List[Dict]:
+    # Keep only items that appear in OSM name set (simple grounding)
+    pruned = []
+    for day in model_days:
+        clean = {}
+        for slot, items in day.items():
+            keep = []
+            for it in items:
+                name = it.get("name","").strip()
+                if name and name in osm_names:
+                    keep.append(it)
+            clean[slot] = keep
+        pruned.append(clean)
+    return pruned
+
+def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, end: date,
+                                   lat: float, lon: float, interests: List[str], amount: int) -> Tuple[str, List[Dict]]:
+    client = get_openai_client()
+    days = max((end - start).days, 1)
+
+    # Fallback to local assembly if no key available
+    if client is None:
+        st.info("OpenAI key not found — using local heuristic itinerary.")
+        return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
+
+    catalog = _osm_catalog(lat, lon)
+    osm_names = sorted(list(_as_name_set(catalog)))[:800]  # cap tokens
+
+    # Structured output schema the model must follow
+    schema = {
+        "type": "object",
+        "properties": {
+            "days": {
+                "type": "array",
+                "items": {
+                    "type":"object",
+                    "properties":{
+                        "Morning":{"type":"array","items":{"type":"object","properties":{
+                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}},"required":["name"]}},
+                        "Afternoon":{"type":"array","items":{"type":"object","properties":{
+                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}},"required":["name"]}},
+                        "Evening":{"type":"array","items":{"type":"object","properties":{
+                            "name":{"type":"string"},"why":{"type":"string"},"est_cost_usd":{"type":"number"}},"required":["name"]}}
+                    },
+                    "required":["Morning","Afternoon","Evening"]
+                }
+            },
+            "notes":{"type":"string"}
+        },
+        "required":["days"]
+    }
+
+    budget_band = (
+        "shoestring" if amount < 50 else
+        "moderate" if amount < 150 else
+        "premium"
+    )
+
+    # Responses API: ask for JSON that only uses places present in osm_names
+    try:
+        resp = client.responses.create(
+            model="gpt-4o-mini",
+            # You can swap to a newer small model when available (e.g., "gpt-5-mini")
+            input=[{
+                "role": "user",
+                "content": [
+                    {"type":"text","text":(
+                        "You are a travel planner. Build a realistic, walkable itinerary using ONLY places from the provided list. "
+                        "Match the user's budget band and interests. Allocate free/low-cost items for 'shoestring', balanced picks for 'moderate', "
+                        "and paid experiences for 'premium'. Prefer short travel hops. Avoid duplicates across days. "
+                        "Return JSON following the provided schema. Do not include places not in the list."
+                    )},
+                    {"type":"input_text","text":json.dumps({
+                        "city": city, "area": area, "days": days,
+                        "budget_band": budget_band,
+                        "interests": interests,
+                        "allowed_place_names": osm_names
+                    }, ensure_ascii=False)}
+                ]
+            }],
+            json_schema={"name":"itinerary_schema","schema":schema,"strict":True},
+            # modest tokens to keep latency/cost sane
+            max_output_tokens=2000,
+            temperature=0.4,
+        )
+        # Extract structured JSON from Responses API
+        data = resp.output_parsed if hasattr(resp, "output_parsed") else None
+        if not data:
+            # Defensive parse (SDKs may return text)
+            text_out = getattr(resp, "output_text", None) or json.dumps(getattr(resp, "output", {}))
+            data = json.loads(text_out)
+        model_days = data.get("days", [])
+        grounded = _ground_and_prune(model_days, set(osm_names))
+
+        # If grounding removed too much, fall back
+        if not grounded or all(not any(v for v in d.values()) for d in grounded):
+            return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
+
+        # Convert to your existing rendering format
+        out = []
+        for d in grounded:
+            out.append({
+                "Morning": [{"name": x["name"]} for x in d.get("Morning", [])][:1],
+                "Afternoon": [{"name": x["name"]} for x in d.get("Afternoon", [])][:1],
+                "Evening": [{"name": x["name"]} for x in d.get("Evening", [])][:1],
+            })
+        header = f"## {city} Itinerary ({days} days)"
+        return header, out
+
+    except Exception as e:
+        st.warning(f"OpenAI plan generation failed ({e}); using local fallback.")
+        return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
+
+# =========================================================
+# Legacy local itinerary (kept as fallback)
 # =========================================================
 def assemble_itinerary(lat,lon,city,area,start,end,interests,amount):
     days=max((end-start).days,1)
@@ -271,7 +424,13 @@ if go:
     geo=geocode_osm(combined_query(city,area) or city)
     if not geo: st.error("Could not geocode."); st.stop()
 
-    header,days_plan=assemble_itinerary(geo["lat"],geo["lon"],city,area,start_date,end_date,interests,budget)
+    # === NEW: model-assisted plan (grounded on OSM & budget-aware) ===
+    header,days_plan=generate_itinerary_with_openai(
+        city=city, area=area, start=start_date, end=end_date,
+        lat=geo["lat"], lon=geo["lon"],
+        interests=interests, amount=budget
+    )
+
     st.subheader("🗓️ Itinerary")
     st.markdown(render_itinerary(header,days_plan))
     st.markdown(budget_notes(budget))
