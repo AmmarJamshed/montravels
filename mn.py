@@ -12,7 +12,7 @@ import streamlit as st
 from textwrap import shorten
 
 # ================================
-# Page + Light Theme
+# Page + Theme
 # ================================
 st.set_page_config(page_title="MonTravels", page_icon="🧭", layout="wide")
 
@@ -22,8 +22,29 @@ def apply_pokemon_theme():
         .stApp { background-color: #F5F7FA; font-family: 'Trebuchet MS', sans-serif; color: #2C2C2C; }
         h1 { color: #FFCC00; text-shadow: 2px 2px 0px #3B4CCA; }
         h2, h3 { color: #3B4CCA; }
+
+        /* Sidebar */
         section[data-testid="stSidebar"] { background-color: #3B4CCA; color: white; }
         section[data-testid="stSidebar"] * { color: white !important; }
+
+        /* Make inputs readable in the blue sidebar */
+        section[data-testid="stSidebar"] input,
+        section[data-testid="stSidebar"] textarea,
+        section[data-testid="stSidebar"] select,
+        section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] div,
+        section[data-testid="stSidebar"] .stNumberInput input {
+            color: #0f172a !important;             /* dark text */
+            background-color: #eef2ff !important;  /* light bg */
+            border-radius: 10px !important;
+        }
+        section[data-testid="stSidebar"] .stDateInput input {
+            color: #0f172a !important;
+            background-color: #eef2ff !important;
+        }
+        section[data-testid="stSidebar"] .stMultiSelect div[role="listbox"] * {
+            color: #0f172a !important;
+        }
+
         div.stButton > button {
             background-color: #FF1C1C; color: white;
             border-radius: 12px; border: 2px solid #3B4CCA; font-weight: bold; transition: 0.2s;
@@ -47,7 +68,7 @@ st.title("🧭 MonTravels")
 try:
     from openai import OpenAI
 except ImportError:
-    OpenAI = None
+    OpenAI = None  # we'll warn at runtime
 
 @st.cache_resource(show_spinner=False)
 def get_openai_client() -> Optional["OpenAI"]:
@@ -59,7 +80,7 @@ def get_openai_client() -> Optional["OpenAI"]:
     return OpenAI(api_key=key)
 
 # ================================
-# Utilities
+# Utils
 # ================================
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
@@ -106,25 +127,75 @@ def deeplink_booking_with_keywords(city: str, area: Optional[str], keywords: str
             f"&lang=en-us&src=index&sb=1&_mtu={_cachebuster(ss_raw)}")
 
 # ================================
-# Geocoding + POIs (OSM)
+# Multi-provider Geocoder (reliable)
 # ================================
 @st.cache_data(ttl=3600, show_spinner=False)
-def geocode_osm(query: str) -> Optional[Dict]:
+def geocode_city(query: str) -> Optional[Dict]:
+    """
+    Try 3 public providers in order:
+      1) OSM Nominatim
+      2) Maps.co (Nominatim-backed mirror)
+      3) Photon/Komoot
+    Returns: {"lat": float, "lon": float, "name": str} or None
+    """
+    q = (query or "").strip()
+    if not q:
+        return None
+
+    # 1) Nominatim
     try:
         r = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": query, "format": "json", "limit": 1},
+            params={"q": q, "format": "json", "limit": 1},
             headers={"User-Agent": "MonTravels/1.0"},
-            timeout=10
+            timeout=8,
         )
-        r.raise_for_status()
-        js = r.json() or []
-        if js:
-            return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0]["display_name"]}
+        if r.ok:
+            js = r.json() or []
+            if js:
+                return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0]["display_name"]}
     except Exception:
-        return None
+        pass
+
+    # 2) Maps.co mirror
+    try:
+        r = requests.get(
+            "https://geocode.maps.co/search",
+            params={"q": q, "limit": 1},
+            headers={"User-Agent": "MonTravels/1.0"},
+            timeout=8,
+        )
+        if r.ok:
+            js = r.json() or []
+            if js:
+                return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0].get("display_name") or q}
+    except Exception:
+        pass
+
+    # 3) Photon/Komoot
+    try:
+        r = requests.get(
+            "https://photon.komoot.io/api/",
+            params={"q": q, "limit": 1},
+            headers={"User-Agent": "MonTravels/1.0"},
+            timeout=8,
+        )
+        if r.ok:
+            js = r.json() or {}
+            feats = (js.get("features") or [])
+            if feats:
+                coords = feats[0]["geometry"]["coordinates"]  # [lon, lat]
+                props = feats[0].get("properties", {})
+                name = props.get("name") or props.get("city") or props.get("country") or q
+                return {"lat": float(coords[1]), "lon": float(coords[0]), "name": name}
+    except Exception:
+        pass
+
     return None
 
+# ================================
+# OSM POIs via Overpass
+# ================================
 OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
 OSM_TARGETS = {
     "landmark":   [("tourism","attraction"), ("historic","~.*"), ("building","cathedral"), ("amenity","place_of_worship")],
@@ -221,7 +292,7 @@ def synthesize_hotel_cards(city: str, area: Optional[str], start: date, end: dat
     return out
 
 # ================================
-# History (fixed bug)
+# History
 # ================================
 def get_user_id():
     try:
@@ -239,7 +310,8 @@ def derive_interest_bias(uid) -> Set[str]:
     freq = {}
     for trip in get_user_history(uid):
         for i in trip.get("interests", []):
-            freq[i.lower()] = freq.get(i.lower(), 0) + 1
+            i = (i or "").lower()
+            freq[i] = freq.get(i, 0) + 1
     return set([k for k,_ in sorted(freq.items(), key=lambda kv: kv[1], reverse=True)[:3]])
 
 # ================================
@@ -250,7 +322,7 @@ def assemble_itinerary(lat,lon,city,area,start,end,interests,amount):
     pools={k:fetch_pois(lat,lon,2500 if k!="viewpoint" else 5000,k,20 if k!="restaurant" else 40) 
            for k in ["landmark","museum","park","cafe","restaurant","viewpoint"]}
     used=set(); origin=(lat,lon); out=[]
-    # simple morning/afternoon/evening with short hops
+    # morning/afternoon/evening with short hops
     for _ in range(days):
         out.append({
             "Morning":  pick_unique(pools["landmark"] or pools["museum"], 1, used, origin),
@@ -389,36 +461,22 @@ def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, 
 # ================================
 # Local Guide (unique tips, no repetition)
 # ================================
-def _narrative_template(city: str, start: date, end: date, interests: List[str], budget: int, days_plan: List[Dict]) -> str:
-    lines = [f"### Your {city} trip ({start}–{end})",
-             f"_Budget: ~${budget}/day · Interests: {', '.join(interests) or '—'}_",
-             ""]
-    for i, day in enumerate(days_plan, 1):
-        lines.append(f"**Day {i}**")
-        for slot in ["Morning","Afternoon","Evening"]:
-            names = [p["name"] for p in day.get(slot, [])]
-            if names:
-                lines.append(f"- {slot}: {names[0]} — short walk, easy pace.")
-        lines.append("")
-    lines.append("_Tip: Check opening hours and carry water._")
-    return "\n".join(lines)
-
 def generate_local_guide_tips(city: str, start: date, end: date, interests: List[str],
                               budget: int, days_plan: List[Dict]) -> str:
     client = get_openai_client()
-    # Build a set of already-mentioned places to AVOID repetition in local tips
     mentioned = set()
     for d in days_plan:
         for s in ["Morning","Afternoon","Evening"]:
             for it in d.get(s, []):
-                mentioned.add(it["name"])
+                if it.get("name"):
+                    mentioned.add(it["name"])
 
     prompt = {
         "instruction": (
             "Write a short 'Your Local Guide Says' section with 6–10 bullet tips. "
-            "Be realistic, budget-aware, and specific (timings, neighborhoods, transit/ride-hailing norms, scams to avoid, "
-            "tipping, ticket hacks, where to find local snacks/markets). "
-            "Include 2–3 lesser-known suggestions (e.g., a typical street or market style) WITHOUT naming any new specific venue. "
+            "Be realistic, budget-aware, and specific (timings, neighborhoods, transit norms, scams to avoid, "
+            "tipping, ticket hacks, where to find typical snacks/markets). "
+            "Include 2–3 lesser-known suggestions WITHOUT naming any new specific venue. "
             "ABSOLUTE RULES: Do NOT repeat the day-by-day places, don't list attraction names, and keep it crisp."
         ),
         "context": {
@@ -431,18 +489,18 @@ def generate_local_guide_tips(city: str, start: date, end: date, interests: List
     }
 
     if client is None:
-        # Minimal, generic but useful tips
+        # Minimal but useful tips
         return (
-            "- Start mornings early to beat crowds and heat.\n"
+            "- Start early to beat crowds and heat.\n"
             "- Use ride-hailing or metro for longer hops; walk short segments.\n"
             "- Carry small change; card acceptance varies at kiosks.\n"
-            "- For budget eats, try busy local food streets at lunch.\n"
+            "- For budget eats, choose busy local food streets at lunch.\n"
             "- Book popular tickets online the night before.\n"
-            "- Evenings: choose compact neighborhoods to minimize transit.\n"
-            "- Respect local dress norms at religious sites.\n"
+            "- Evenings: stick to compact neighborhoods to minimize transit.\n"
+            "- Respect dress norms at religious sites.\n"
             "- Avoid unmetered taxis; confirm price before rides.\n"
-            "- Keep a reusable water bottle; many parks have fountains.\n"
-            "- Sundays/holidays can shift opening hours — double check."
+            "- Keep a reusable bottle; many parks have fountains.\n"
+            "- Sundays/holidays can change hours — double check."
         )
 
     MODEL = os.getenv("OPENAI_TIPS_MODEL", "gpt-4o-mini")
@@ -458,7 +516,14 @@ def generate_local_guide_tips(city: str, start: date, end: date, interests: List
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception:
-        return _narrative_template(city, start, end, interests, budget, days_plan)
+        # Fallback tips
+        return (
+            "- Start early to beat crowds and heat.\n"
+            "- Use ride-hailing or metro for longer hops; walk short segments.\n"
+            "- Carry small change; card acceptance varies at kiosks.\n"
+            "- For budget eats, choose busy local food streets at lunch.\n"
+            "- Book popular tickets online the night before."
+        )
 
 # ================================
 # Reviews (optional toggle, faster defaults)
@@ -529,7 +594,7 @@ def render_reviews_block(name: str, city: str, lat: float, lon: float):
             st.markdown(f"> _{txt}_ — **{who}** {stars}")
 
 # ================================
-# UI — Sidebar (generate ONLY on click)
+# Sidebar (generate ONLY on click)
 # ================================
 with st.sidebar:
     city = st.text_input("Destination*").strip()
@@ -554,11 +619,16 @@ st.caption(f"User: `{uid}`")
 if go:
     if not city:
         st.error("Enter a city."); st.stop()
+    if len(city) < 3:
+        st.error("Destination name looks too short. Try 'Karachi, Pakistan' etc."); st.stop()
 
     with st.spinner("Finding places and building your plan…"):
-        geo = geocode_osm(combined_query(city,area) or city)
+        search_q = combined_query(city, area) or city
+        geo = geocode_city(search_q)
         if not geo:
-            st.error("Could not find that destination."); st.stop()
+            st.error(f"Could not find that destination. (Tried: “{search_q}”)")
+            st.caption("Tip: Try a broader name like 'City, Country'.")
+            st.stop()
 
         # Model-assisted plan (grounded on OSM & budget-aware)
         header, days_plan = generate_itinerary_with_openai(
