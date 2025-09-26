@@ -16,34 +16,27 @@ from textwrap import shorten
 # ================================
 st.set_page_config(page_title="MonTravels", page_icon="🧭", layout="wide")
 
-def apply_pokemon_theme():
+def apply_theme():
     st.markdown("""
         <style>
         .stApp { background-color: #F5F7FA; font-family: 'Trebuchet MS', sans-serif; color: #2C2C2C; }
         h1 { color: #FFCC00; text-shadow: 2px 2px 0px #3B4CCA; }
         h2, h3 { color: #3B4CCA; }
 
-        /* Sidebar */
         section[data-testid="stSidebar"] { background-color: #3B4CCA; color: white; }
         section[data-testid="stSidebar"] * { color: white !important; }
 
-        /* Make inputs readable in the blue sidebar */
         section[data-testid="stSidebar"] input,
         section[data-testid="stSidebar"] textarea,
         section[data-testid="stSidebar"] select,
         section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] div,
-        section[data-testid="stSidebar"] .stNumberInput input {
-            color: #0f172a !important;             /* dark text */
-            background-color: #eef2ff !important;  /* light bg */
-            border-radius: 10px !important;
-        }
+        section[data-testid="stSidebar"] .stNumberInput input,
         section[data-testid="stSidebar"] .stDateInput input {
             color: #0f172a !important;
             background-color: #eef2ff !important;
+            border-radius: 10px !important;
         }
-        section[data-testid="stSidebar"] .stMultiSelect div[role="listbox"] * {
-            color: #0f172a !important;
-        }
+        section[data-testid="stSidebar"] .stMultiSelect div[role="listbox"] * { color: #0f172a !important; }
 
         div.stButton > button {
             background-color: #FF1C1C; color: white;
@@ -59,25 +52,125 @@ def apply_pokemon_theme():
         </style>
     """, unsafe_allow_html=True)
 
-apply_pokemon_theme()
+apply_theme()
 st.title("🧭 MonTravels")
 
-# ================================
-# OpenAI (modern SDK)
-# ================================
+# ==========================================
+# Hugging Face Inference (cache keyed by token+model)
+# ==========================================
 try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None  # we'll warn at runtime
+    from huggingface_hub import InferenceClient
+except Exception:
+    InferenceClient = None
+
+def _get_secret(key: str) -> Optional[str]:
+    try:
+        if hasattr(st, "secrets") and key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.getenv(key)
 
 @st.cache_resource(show_spinner=False)
-def get_openai_client() -> Optional["OpenAI"]:
-    if OpenAI is None:
+def _build_hf_client(token: str, model: str):
+    """Cache is keyed by args. Changing secrets invalidates the cache automatically."""
+    if not token or not model or InferenceClient is None:
         return None
-    key = (st.secrets.get("OPENAI_API_KEY") if hasattr(st, "secrets") else None) or os.getenv("OPENAI_API_KEY")
-    if not key:
-        return None
-    return OpenAI(api_key=key)
+    return InferenceClient(model=model, token=token, timeout=40)
+
+def get_hf_client():
+    token = _get_secret("HF_TOKEN") or ""
+    model = _get_secret("HF_MODEL") or ""
+    return _build_hf_client(token, model)
+
+def _hf_rest_generate(prompt: str, max_new_tokens: int, temperature: float) -> str:
+    """Direct REST call to HF Inference API (text-generation). Falls back to conversational if needed."""
+    token = _get_secret("HF_TOKEN")
+    model = _get_secret("HF_MODEL")
+    if not token or not model:
+        return ""
+    url = f"https://api-inference.huggingface.co/models/{model}"
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": max_new_tokens,
+            "temperature": temperature,
+            "repetition_penalty": 1.05,
+            "return_full_text": False,
+            "stop": ["\n\n\n", "\n```", "\n</s>", "</s>"]
+        }
+    }
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        if r.status_code == 409:
+            st.info("Model is loading on Hugging Face… try again in a moment.")
+        r.raise_for_status()
+        js = r.json()
+        if isinstance(js, dict) and "error" in js and "conversational" in js["error"].lower():
+            return _hf_rest_conversational(prompt, max_new_tokens, temperature)
+        if isinstance(js, list) and js and "generated_text" in js[0]:
+            return js[0]["generated_text"]
+        if isinstance(js, dict) and "generated_text" in js:
+            return js["generated_text"]
+        return ""
+    except Exception as e:
+        if "conversational" in str(e).lower():
+            return _hf_rest_conversational(prompt, max_new_tokens, temperature)
+        st.warning(f"Hugging Face REST error: {e}")
+        return ""
+
+def _hf_rest_conversational(prompt: str, max_new_tokens: int, temperature: float) -> str:
+    """Conversational-formatted REST call (works for Zephyr)."""
+    token = _get_secret("HF_TOKEN")
+    model = _get_secret("HF_MODEL")
+    if not token or not model:
+        return ""
+    url = f"https://api-inference.huggingface.co/models/{model}"
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {
+        "inputs": {
+            "past_user_inputs": [],
+            "generated_responses": [],
+            "text": prompt
+        },
+        "parameters": {
+            "max_new_tokens": max_new_tokens,
+            "temperature": temperature,
+            "repetition_penalty": 1.05
+        }
+    }
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        js = r.json()
+        if isinstance(js, dict) and "generated_text" in js:
+            return js["generated_text"]
+        if isinstance(js, list) and js and "generated_text" in js[0]:
+            return js[0]["generated_text"]
+        return ""
+    except Exception as e:
+        st.warning(f"Hugging Face conversational error: {e}")
+        return ""
+
+def hf_generate_text(prompt: str, max_new_tokens: int = 800, temperature: float = 0.4) -> str:
+    """Try official client (text_generation). On task mismatch/errors, fall back to REST & conversational."""
+    client = get_hf_client()
+    if client is not None:
+        try:
+            return client.text_generation(
+                prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                do_sample=True,
+                repetition_penalty=1.05,
+                stop_sequences=["\n\n\n", "\n```", "\n</s>", "</s>"]
+            )
+        except Exception as e:
+            if "conversational" in str(e).lower():
+                return _hf_rest_conversational(prompt, max_new_tokens, temperature)
+            st.warning(f"Hugging Face client error, switching to REST: {e}")
+    return _hf_rest_generate(prompt, max_new_tokens, temperature)
 
 # ================================
 # Utils
@@ -127,29 +220,17 @@ def deeplink_booking_with_keywords(city: str, area: Optional[str], keywords: str
             f"&lang=en-us&src=index&sb=1&_mtu={_cachebuster(ss_raw)}")
 
 # ================================
-# Multi-provider Geocoder (reliable)
+# Geocoding (multi-provider)
 # ================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def geocode_city(query: str) -> Optional[Dict]:
-    """
-    Try 3 public providers in order:
-      1) OSM Nominatim
-      2) Maps.co (Nominatim-backed mirror)
-      3) Photon/Komoot
-    Returns: {"lat": float, "lon": float, "name": str} or None
-    """
     q = (query or "").strip()
-    if not q:
-        return None
+    if not q: return None
 
-    # 1) Nominatim
     try:
-        r = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": q, "format": "json", "limit": 1},
-            headers={"User-Agent": "MonTravels/1.0"},
-            timeout=8,
-        )
+        r = requests.get("https://nominatim.openstreetmap.org/search",
+                         params={"q": q, "format": "json", "limit": 1},
+                         headers={"User-Agent": "MonTravels/1.0"}, timeout=8)
         if r.ok:
             js = r.json() or []
             if js:
@@ -157,14 +238,10 @@ def geocode_city(query: str) -> Optional[Dict]:
     except Exception:
         pass
 
-    # 2) Maps.co mirror
     try:
-        r = requests.get(
-            "https://geocode.maps.co/search",
-            params={"q": q, "limit": 1},
-            headers={"User-Agent": "MonTravels/1.0"},
-            timeout=8,
-        )
+        r = requests.get("https://geocode.maps.co/search",
+                         params={"q": q, "limit": 1},
+                         headers={"User-Agent": "MonTravels/1.0"}, timeout=8)
         if r.ok:
             js = r.json() or []
             if js:
@@ -172,25 +249,20 @@ def geocode_city(query: str) -> Optional[Dict]:
     except Exception:
         pass
 
-    # 3) Photon/Komoot
     try:
-        r = requests.get(
-            "https://photon.komoot.io/api/",
-            params={"q": q, "limit": 1},
-            headers={"User-Agent": "MonTravels/1.0"},
-            timeout=8,
-        )
+        r = requests.get("https://photon.komoot.io/api/",
+                         params={"q": q, "limit": 1},
+                         headers={"User-Agent": "MonTravels/1.0"}, timeout=8)
         if r.ok:
             js = r.json() or {}
             feats = (js.get("features") or [])
             if feats:
-                coords = feats[0]["geometry"]["coordinates"]  # [lon, lat]
+                coords = feats[0]["geometry"]["coordinates"]
                 props = feats[0].get("properties", {})
                 name = props.get("name") or props.get("city") or props.get("country") or q
                 return {"lat": float(coords[1]), "lon": float(coords[0]), "name": name}
     except Exception:
         pass
-
     return None
 
 # ================================
@@ -217,11 +289,9 @@ def build_overpass_query(lat: float, lon: float, radius_m: int, kv_pairs: List[T
 
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_pois(lat: float, lon: float, radius_m: int = 2500, kind: str = "landmark", limit: int = 30) -> List[Dict]:
-    # smaller radius + limits -> faster & more walkable
     try:
         kv = OSM_TARGETS.get(kind, [])
-        if not kv:
-            return []
+        if not kv: return []
         q = build_overpass_query(lat, lon, radius_m, kv)
         r = requests.post(OVERPASS_ENDPOINT, data={"data": q}, timeout=20)
         r.raise_for_status()
@@ -230,13 +300,10 @@ def fetch_pois(lat: float, lon: float, radius_m: int = 2500, kind: str = "landma
         for e in elements:
             tags = e.get("tags", {})
             name = tags.get("name")
-            if not name or name in seen:
-                continue
+            if not name or name in seen: continue
             seen.add(name)
             lat_, lon_ = e.get("lat") or e.get("center",{}).get("lat"), e.get("lon") or e.get("center",{}).get("lon")
-            if lat_ and lon_:
-                out.append({"name": name, "lat": float(lat_), "lon": float(lon_), "tags": tags})
-        # Prefer closest (walkable)
+            if lat_ and lon_: out.append({"name": name, "lat": float(lat_), "lon": float(lon_), "tags": tags})
         out.sort(key=lambda p: haversine_km(lat, lon, p["lat"], p["lon"]))
         return out[:limit]
     except Exception:
@@ -256,11 +323,11 @@ def pick_unique(pois: List[Dict], n: int, used: Set[str], origin: Tuple[float,fl
 # ================================
 def budget_notes(amount: int) -> str:
     if amount < 50:
-        return "**Budget (~${}/day)**\n- Street food, public transport, free sights.".format(amount)
+        return f"**Budget (~${amount}/day)**\n- Street food, public transport, free sights."
     elif amount < 150:
-        return "**Budget (~${}/day)**\n- Mix of free & paid attractions, casual dining.".format(amount)
+        return f"**Budget (~${amount}/day)**\n- Mix of free & paid attractions, casual dining."
     else:
-        return "**Budget (~${}/day)**\n- Premium tours, fine dining, upscale stays.".format(amount)
+        return f"**Budget (~${amount}/day)**\n- Premium tours, fine dining, upscale stays."
 
 def budget_band(amount: int) -> str:
     return "shoestring" if amount < 50 else ("moderate" if amount < 150 else "premium")
@@ -315,57 +382,35 @@ def derive_interest_bias(uid) -> Set[str]:
     return set([k for k,_ in sorted(freq.items(), key=lambda kv: kv[1], reverse=True)[:3]])
 
 # ================================
-# Heuristic fallback itinerary
+# Heuristic fallback itinerary (with rough costs)
 # ================================
+def _rough_cost(slot_name: str, band: str) -> float:
+    table = {
+        "shoestring": {"Morning": 0, "Afternoon": 5, "Evening": 8},
+        "moderate":   {"Morning": 5, "Afternoon": 15, "Evening": 20},
+        "premium":    {"Morning": 20,"Afternoon": 35, "Evening": 40},
+    }
+    return float(table.get(band, table["moderate"]).get(slot_name, 10))
+
 def assemble_itinerary(lat,lon,city,area,start,end,interests,amount):
     days = max((end-start).days, 1)
+    band = budget_band(amount)
     pools={k:fetch_pois(lat,lon,2500 if k!="viewpoint" else 5000,k,20 if k!="restaurant" else 40) 
            for k in ["landmark","museum","park","cafe","restaurant","viewpoint"]}
     used=set(); origin=(lat,lon); out=[]
-    # morning/afternoon/evening with short hops
     for _ in range(days):
-        out.append({
-            "Morning":  pick_unique(pools["landmark"] or pools["museum"], 1, used, origin),
-            "Afternoon":pick_unique(pools["park"] or pools["viewpoint"], 1, used, origin),
-            "Evening":  pick_unique(pools["restaurant"] or pools["cafe"], 1, used, origin)
-        })
-    return f"## {city} Itinerary ({days} days)", out
+        morning = pick_unique(pools["landmark"] or pools["museum"], 1, used, origin)
+        afternoon = pick_unique(pools["park"] or pools["viewpoint"], 1, used, origin)
+        evening = pick_unique(pools["restaurant"] or pools["cafe"], 1, used, origin)
+        for slot, arr in (("Morning", morning), ("Afternoon", afternoon), ("Evening", evening)):
+            if arr: arr[0]["est_cost_usd"] = _rough_cost(slot, band)
+        out.append({"Morning": morning, "Afternoon": afternoon, "Evening": evening})
+    header = f"## {city} Itinerary ({days} days)"
+    return header, out
 
 # ================================
-# Grounding helpers
+# JSON helpers
 # ================================
-def _osm_catalog(lat: float, lon: float) -> Dict[str, List[Dict]]:
-    # smaller sets -> faster
-    return {
-        "landmarks":  fetch_pois(lat, lon, 2500, "landmark", 40),
-        "museums":    fetch_pois(lat, lon, 2500, "museum", 20),
-        "parks":      fetch_pois(lat, lon, 2500, "park", 20),
-        "restaurants":fetch_pois(lat, lon, 2500, "restaurant", 40),
-        "viewpoints": fetch_pois(lat, lon, 4000, "viewpoint", 20),
-        "cafes":      fetch_pois(lat, lon, 2000, "cafe", 25),
-    }
-
-def _as_name_set(catalog: Dict[str, List[Dict]]) -> Set[str]:
-    names = set()
-    for arr in catalog.values():
-        for x in arr:
-            names.add(x["name"])
-    return names
-
-def _ground_and_prune(model_days: List[Dict], osm_names: Set[str]) -> List[Dict]:
-    pruned = []
-    for day in model_days:
-        clean = {}
-        for slot, items in day.items():
-            keep = []
-            for it in items:
-                name = (it.get("name") or "").strip()
-                if name and name in osm_names:
-                    keep.append({"name": name})
-            clean[slot] = keep[:1]  # keep first only -> concise
-        pruned.append(clean)
-    return pruned
-
 def _extract_json(text: str) -> Dict:
     if not text: return {}
     try:
@@ -389,6 +434,7 @@ def _coerce_to_schema(data: Dict) -> Dict:
     if isinstance(data.get("notes"), str): out["notes"] = data["notes"]
     days = data.get("days", [])
     if not isinstance(days, list): return out
+
     def _norm_slot(items):
         norm=[]
         if isinstance(items, list):
@@ -399,140 +445,120 @@ def _coerce_to_schema(data: Dict) -> Dict:
                     if isinstance(it.get("est_cost_usd"), (int,float)): o["est_cost_usd"]=float(it["est_cost_usd"])
                     norm.append(o)
         return norm
+
     for d in days:
         if not isinstance(d, dict): continue
-        out["days"].append({
-            "Morning":  _norm_slot(d.get("Morning", [])),
-            "Afternoon":_norm_slot(d.get("Afternoon", [])),
-            "Evening":  _norm_slot(d.get("Evening", [])),
-        })
+        rec = {
+            "Morning":  _norm_slot(d.get("Morning", []))[:1],
+            "Afternoon":_norm_slot(d.get("Afternoon", []))[:1],
+            "Evening":  _norm_slot(d.get("Evening", []))[:1],
+            "daily_notes": d.get("daily_notes", "") if isinstance(d.get("daily_notes",""), str) else "",
+            "daily_estimated_cost_usd": float(d.get("daily_estimated_cost_usd", 0)) if isinstance(d.get("daily_estimated_cost_usd", None),(int,float)) else None
+        }
+        out["days"].append(rec)
     return out
 
 # ================================
-# Itinerary with OpenAI (concise + budget-aware)
+# HF-enhanced itinerary (costed, grounded)
 # ================================
-def generate_itinerary_with_openai(city: str, area: Optional[str], start: date, end: date,
-                                   lat: float, lon: float, interests: List[str], amount: int) -> Tuple[str, List[Dict]]:
-    client = get_openai_client()
-    days = max((end - start).days, 1)
-
-    if client is None:
-        st.info("OpenAI key not found — using local heuristic itinerary.")
-        return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
-
-    catalog = _osm_catalog(lat, lon)
-    osm_names = sorted(list(_as_name_set(catalog)))[:500]  # smaller grounding set -> faster
-    band = budget_band(amount)
-
-    system_msg = (
-        "You are a practical travel planner. Build a realistic, concise, walkable itinerary "
-        "using ONLY places from 'allowed_place_names'. Respect 'budget_band' (shoestring/moderate/premium). "
-        "One activity per slot (Morning/Afternoon/Evening). Prefer short travel hops. No duplicates. "
-        "Output ONLY valid JSON: {\"days\": [{\"Morning\": [{\"name\": str}], \"Afternoon\": [...], \"Evening\": [...]}], \"notes\": str}."
-    )
-    user_payload = {
-        "city": city, "area": area, "days": days,
-        "budget_band": band,
-        "interests": interests,
-        "allowed_place_names": osm_names
+def _osm_catalog(lat: float, lon: float) -> Dict[str, List[Dict]]:
+    return {
+        "landmarks":  fetch_pois(lat, lon, 2500, "landmark", 40),
+        "museums":    fetch_pois(lat, lon, 2500, "museum", 20),
+        "parks":      fetch_pois(lat, lon, 2500, "park", 20),
+        "restaurants":fetch_pois(lat, lon, 2500, "restaurant", 40),
+        "viewpoints": fetch_pois(lat, lon, 4000, "viewpoint", 20),
+        "cafes":      fetch_pois(lat, lon, 2000, "cafe", 25),
     }
 
-    MODEL = os.getenv("OPENAI_TRAVEL_MODEL", "gpt-4o-mini")
+def _as_name_set(catalog: Dict[str, List[Dict]]) -> Set[str]:
+    names = set()
+    for arr in catalog.values():
+        for x in arr: names.add(x["name"])
+    return names
 
-    try:
-        comp = client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "system", "content": system_msg},
-                      {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
-            temperature=0.4,
-            max_tokens=1200,
-        )
-        raw = comp.choices[0].message.content or ""
-        data = _coerce_to_schema(_extract_json(raw))
-        grounded = _ground_and_prune(data.get("days", []), set(osm_names))
-        if not grounded or all(not any(v for v in d.values()) for d in grounded):
-            return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
-        header = f"## {city} Itinerary ({days} days)"
-        return header, grounded
-    except Exception as e:
-        st.warning(f"OpenAI plan generation failed ({e}); using local fallback.")
+def _ground_and_prune(model_days: List[Dict], osm_names: Set[str]) -> List[Dict]:
+    pruned = []
+    for day in model_days:
+        clean = {}
+        for slot in ["Morning","Afternoon","Evening"]:
+            keep = []
+            for it in day.get(slot, []):
+                name = (it.get("name") or "").strip()
+                if name and name in osm_names:
+                    keep.append({"name": name, "est_cost_usd": it.get("est_cost_usd")})
+            clean[slot] = keep[:1]
+        clean["daily_notes"] = day.get("daily_notes","")
+        clean["daily_estimated_cost_usd"] = day.get("daily_estimated_cost_usd")
+        pruned.append(clean)
+    return pruned
+
+def generate_itinerary_hf(city: str, area: Optional[str], start: date, end: date,
+                          lat: float, lon: float, interests: List[str], amount: int) -> Tuple[str, List[Dict]]:
+    days = max((end - start).days, 1)
+    catalog = _osm_catalog(lat, lon)
+    osm_names = sorted(list(_as_name_set(catalog)))[:500]
+    band = budget_band(amount)
+
+    prompt = (
+        "You are a practical travel planner.\n"
+        "TASK: Produce a realistic, concise, walkable itinerary with EXACTLY one activity per slot (Morning/Afternoon/Evening) "
+        "for the given number of days. Use ONLY places from the 'ALLOWED_PLACE_NAMES' list. Prefer short travel hops and avoid duplicates.\n"
+        f"Budget band: {band}. Budget per day: {amount} USD. Interests: {', '.join(interests) if interests else '—'}.\n"
+        "For each slot item, include a short 'why' and an 'est_cost_usd' (0 allowed for free sights). "
+        "Provide a 'daily_estimated_cost_usd' that sums the three slots, and a brief 'daily_notes'.\n"
+        "Return ONLY valid JSON with this exact schema (no prose):\n"
+        "{\"days\":[{\"Morning\":[{\"name\":str,\"why\":str,\"est_cost_usd\":number}],"
+        "\"Afternoon\":[{\"name\":str,\"why\":str,\"est_cost_usd\":number}],"
+        "\"Evening\":[{\"name\":str,\"why\":str,\"est_cost_usd\":number}],"
+        "\"daily_notes\":str,\"daily_estimated_cost_usd\":number}],\"notes\":str}\n\n"
+        f"CITY: {city}\nAREA: {area or '—'}\nDAYS: {days}\nALLOWED_PLACE_NAMES: {osm_names}\n"
+    )
+
+    raw = hf_generate_text(prompt, max_new_tokens=900, temperature=0.4)
+    data = _coerce_to_schema(_extract_json(raw))
+    grounded = _ground_and_prune(data.get("days", []), set(osm_names))
+    if not grounded or all(not any(v for v in d.values()) for d in grounded):
         return assemble_itinerary(lat, lon, city, area, start, end, interests, amount)
+    header = f"## {city} Itinerary ({days} days)"
+    return header, grounded
 
 # ================================
-# Local Guide (unique tips, no repetition)
+# Local Guide tips (HF or fallback, no place repeats)
 # ================================
 def generate_local_guide_tips(city: str, start: date, end: date, interests: List[str],
                               budget: int, days_plan: List[Dict]) -> str:
-    client = get_openai_client()
     mentioned = set()
     for d in days_plan:
         for s in ["Morning","Afternoon","Evening"]:
             for it in d.get(s, []):
-                if it.get("name"):
-                    mentioned.add(it["name"])
+                if it.get("name"): mentioned.add(it["name"])
 
-    prompt = {
-        "instruction": (
-            "Write a short 'Your Local Guide Says' section with 6–10 bullet tips. "
-            "Be realistic, budget-aware, and specific (timings, neighborhoods, transit norms, scams to avoid, "
-            "tipping, ticket hacks, where to find typical snacks/markets). "
-            "Include 2–3 lesser-known suggestions WITHOUT naming any new specific venue. "
-            "ABSOLUTE RULES: Do NOT repeat the day-by-day places, don't list attraction names, and keep it crisp."
-        ),
-        "context": {
-            "city": city,
-            "dates": {"start": str(start), "end": str(end)},
-            "budget_per_day_usd": budget,
-            "interests": interests,
-            "already_mentioned_places": sorted(list(mentioned))
-        }
-    }
+    prompt = (
+        f"Write a short section titled 'Your Local Guide Says' with 6–10 bullet tips for {city}.\n"
+        "Rules:\n"
+        "- Be realistic, budget-aware, and specific (timings, neighborhoods, transit norms, scams to avoid, tipping, ticket hacks, market/street-food etiquette).\n"
+        "- Include 2–3 lesser-known suggestions WITHOUT naming any specific venue.\n"
+        f"- ABSOLUTE: Do NOT repeat these place names: {', '.join(sorted(list(mentioned))) or '—'}.\n"
+        "- Keep it crisp; bullets only.\n"
+        "Return plain text bullets (no JSON).\n"
+    )
 
-    if client is None:
-        # Minimal but useful tips
-        return (
-            "- Start early to beat crowds and heat.\n"
-            "- Use ride-hailing or metro for longer hops; walk short segments.\n"
-            "- Carry small change; card acceptance varies at kiosks.\n"
-            "- For budget eats, choose busy local food streets at lunch.\n"
-            "- Book popular tickets online the night before.\n"
-            "- Evenings: stick to compact neighborhoods to minimize transit.\n"
-            "- Respect dress norms at religious sites.\n"
-            "- Avoid unmetered taxis; confirm price before rides.\n"
-            "- Keep a reusable bottle; many parks have fountains.\n"
-            "- Sundays/holidays can change hours — double check."
-        )
-
-    MODEL = os.getenv("OPENAI_TIPS_MODEL", "gpt-4o-mini")
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role":"system","content":"You are a savvy local who gives concise, actionable travel tips."},
-                {"role":"user","content": json.dumps(prompt, ensure_ascii=False)}
-            ],
-            temperature=0.6,
-            max_tokens=500,
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception:
-        # Fallback tips
-        return (
-            "- Start early to beat crowds and heat.\n"
-            "- Use ride-hailing or metro for longer hops; walk short segments.\n"
-            "- Carry small change; card acceptance varies at kiosks.\n"
-            "- For budget eats, choose busy local food streets at lunch.\n"
-            "- Book popular tickets online the night before."
-        )
+    text = hf_generate_text(prompt, max_new_tokens=300, temperature=0.6)
+    return (text or "").strip() or (
+        "- Start early to beat crowds and heat.\n"
+        "- Use ride-hailing or metro for longer hops; walk short segments.\n"
+        "- Book popular tickets online the night before."
+    )
 
 # ================================
-# Reviews (optional toggle, faster defaults)
+# OPTIONAL Google Reviews
 # ================================
 GOOGLE_PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 GOOGLE_PLACES_DETAILS_URL_TMPL = "https://places.googleapis.com/v1/places/{place_id}"
 
 def _google_headers(field_mask: str) -> Dict[str, str]:
-    key = (st.secrets.get("GOOGLE_MAPS_API_KEY") if hasattr(st, "secrets") else None) or os.getenv("GOOGLE_MAPS_API_KEY")
+    key = _get_secret("GOOGLE_MAPS_API_KEY")
     if not key: return {}
     return {"X-Goog-Api-Key": key, "X-Goog-FieldMask": field_mask, "Content-Type": "application/json"}
 
@@ -606,9 +632,29 @@ with st.sidebar:
     budget  = st.number_input("Budget ($/day)", 10, 1000, 100)
     interests = st.multiselect("Interests", ["food","history","museums","nature","nightlife"], default=["food","history"])
     st.markdown("---")
-    tone = st.selectbox("Tone", ["Friendly", "Crisp", "Excited"], index=0)
     fetch_reviews = st.checkbox("Fetch online reviews (slower)", value=False)
+    show_debug = st.checkbox("Show debug (HF secrets)")
+    force_refresh = st.button("♻️ Force model refresh")
     go = st.button("✨ Build Plan")
+
+if force_refresh:
+    try:
+        _build_hf_client.clear()
+        st.success("Model client cache cleared. Click Build Plan again.")
+    except Exception:
+        st.info("If needed, use the app menu: ⋮ → Clear cache, then rerun.")
+
+# Debug panel
+if show_debug:
+    token = _get_secret("HF_TOKEN")
+    model = _get_secret("HF_MODEL")
+    masked = (f"{token[:6]}…{token[-4:]}" if token and len(token) > 12 else token) if token else "❌ not found"
+    st.info({
+        "HF_TOKEN present?": bool(token),
+        "HF_TOKEN (masked)": masked,
+        "HF_MODEL": model or "❌ not found",
+        "huggingface_hub installed?": InferenceClient is not None
+    })
 
 uid = get_user_id()
 st.caption(f"User: `{uid}`")
@@ -630,27 +676,56 @@ if go:
             st.caption("Tip: Try a broader name like 'City, Country'.")
             st.stop()
 
-        # Model-assisted plan (grounded on OSM & budget-aware)
-        header, days_plan = generate_itinerary_with_openai(
+        header, days_plan = generate_itinerary_hf(
             city=city, area=area, start=start_date, end=end_date,
             lat=geo["lat"], lon=geo["lon"],
             interests=interests, amount=budget
         )
 
-    # ===== Quick View (concise) =====
+    # ===== Quick View (with per-slot costs) =====
     st.subheader("🗓️ Itinerary (Quick View)")
     st.markdown(header)
+
+    trip_cost = 0.0
+    planned_days = 0
+
     for i, slots in enumerate(days_plan, 1):
         st.markdown(f"### Day {i}")
+        day_cost = 0.0
         for part in ["Morning", "Afternoon", "Evening"]:
             items = slots.get(part, [])
             if not items: 
                 continue
-            names = ", ".join(p["name"] for p in items)
-            st.markdown(f"- **{part}**: {names}")
+            first = items[0]
+            nm = first.get("name","")
+            cst = first.get("est_cost_usd")
+            cost_txt = f" (~${cst:.0f})" if isinstance(cst,(int,float)) else ""
+            st.markdown(f"- **{part}**: {nm}{cost_txt}")
+            if isinstance(cst,(int,float)): 
+                day_cost += float(cst)
             if fetch_reviews:
                 with st.expander("See quick reviews"):
-                    render_reviews_block(items[0]["name"], city or "", geo["lat"], geo["lon"])
+                    render_reviews_block(nm, city or "", geo["lat"], geo["lon"])
+
+        dn = slots.get("daily_notes","")
+        dsum = slots.get("daily_estimated_cost_usd")
+        if isinstance(dsum,(int,float)):
+            day_cost = float(dsum)
+        if dn:
+            st.caption(dn)
+        st.write(f"**Estimated day spend:** ${day_cost:.0f}")
+        trip_cost += day_cost
+        planned_days += 1
+
+    target = float(budget) * max(planned_days, 1)
+    delta = trip_cost - target
+    st.markdown("### 💰 Budget Use")
+    st.write(f"- **Planned total:** ${trip_cost:.0f}")
+    st.write(f"- **Your budget ({planned_days} × ${budget:.0f}/day):** ${target:.0f}")
+    if delta > 5:
+        st.warning(f"Over budget by ~${delta:.0f}. Consider swapping one paid slot for a free landmark/park.")
+    else:
+        st.success("Within your budget 👍")
 
     st.markdown(budget_notes(budget))
 
@@ -663,7 +738,7 @@ if go:
         )
     st.markdown(tips)
 
-    # ---- Stay options ----
+    # ---- Places to stay ----
     st.subheader("🏨 Places to Stay")
     hotel_cards = synthesize_hotel_cards(city, area, start_date, end_date, adults, interests, budget, derive_interest_bias(uid))
     for c in hotel_cards:
@@ -673,6 +748,22 @@ if go:
             st.write("Tags:", ", ".join(c["tags"]))
             external_link_button("Open on Booking.com", c["link"])
     external_link_button("🔗 See all on Booking.com", deeplink_booking_city(city or area or "", start_date, end_date, adults))
+
+    # ---- Travel partners ----
+    st.subheader("✈️ Travel Partners (Booking Help)")
+    agents = [
+        {"name":"GlobeTrek Tours","desc":"Cultural & family packages","email":"info@globetrek.com","link":"https://globetrek.example.com"},
+        {"name":"SkyHigh Travels","desc":"Custom itineraries & visa support","email":"bookings@skyhigh.example.com","link":"https://skyhigh.example.com"}
+    ]
+    summary = f"Destination: {city}\nDates: {start_date}→{end_date}\nBudget: ${budget}/day\nAdults: {adults}\nInterests: {', '.join(interests)}"
+    for a in agents:
+        with st.container():
+            st.markdown(f"**{a['name']}**")
+            st.caption(a["desc"])
+            external_link_button("🌍 Visit Website", a["link"])
+            subject = urllib.parse.quote(f"MonTravels Plan — {city} {start_date}→{end_date}")
+            body    = urllib.parse.quote(f"Hello {a['name']},\n\nHere is my MonTravels plan:\n{summary}\n\nPlease help me book this trip.")
+            external_link_button("📧 Send My Plan", f"mailto:{a['email']}?subject={subject}&body={body}")
 
     # ---- History ----
     add_history(uid, {"city":city,"area":area,"start":str(start_date),"end":str(end_date),"budget":budget,"interests":interests})
