@@ -5,11 +5,10 @@ import json
 import time
 import hashlib
 from datetime import date, timedelta
-from typing import Optional, List, Set, Dict, Tuple
+from typing import Optional, List, Dict, Tuple
 import urllib.parse
 import requests
 import streamlit as st
-from textwrap import shorten
 
 # LangChain Groq
 from langchain_openai import ChatOpenAI
@@ -35,13 +34,13 @@ def apply_theme():
         section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] div,
         section[data-testid="stSidebar"] .stNumberInput input,
         section[data-testid="stSidebar"] .stDateInput input {
-            color: #000000 !important;          /* black text */
+            color: #000000 !important;
             background-color: #eef2ff !important;
             border-radius: 10px !important;
         }
         section[data-testid="stSidebar"] input::placeholder,
         section[data-testid="stSidebar"] textarea::placeholder {
-            color: #555555 !important;   /* gray placeholder */
+            color: #555555 !important;
         }
 
         div.stButton > button {
@@ -79,16 +78,6 @@ def groq_generate_text(prompt: str, max_new_tokens: int = 600, temperature: floa
 # ================================
 # Utils
 # ================================
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1); dl = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(p1) * math.cos(p2) * math.sin(dl/2)**2
-    return 2 * R * math.asin(math.sqrt(a))
-
-def combined_query(city: str, area: Optional[str]) -> str:
-    return (f"{city} {area}".strip() if area else city).strip()
-
 def _cachebuster(seed: str) -> str:
     raw = f"{seed}-{time.time_ns()}"
     return hashlib.md5(raw.encode()).hexdigest()[:10]
@@ -102,7 +91,6 @@ def geocode_city(query: str) -> Optional[Dict]:
     if not q: return None
     headers = {"User-Agent": "MonTravelsApp/1.0"}
 
-    # 1. Nominatim
     try:
         r = requests.get("https://nominatim.openstreetmap.org/search",
                          params={"q": q, "format": "json", "limit": 1},
@@ -114,7 +102,6 @@ def geocode_city(query: str) -> Optional[Dict]:
     except Exception:
         pass
 
-    # 2. Maps.co
     try:
         r = requests.get("https://geocode.maps.co/search",
                          params={"q": q, "limit": 1},
@@ -126,7 +113,6 @@ def geocode_city(query: str) -> Optional[Dict]:
     except Exception:
         pass
 
-    # 3. Photon (Komoot)
     try:
         r = requests.get("https://photon.komoot.io/api/",
                          params={"q": q, "limit": 1},
@@ -150,7 +136,7 @@ def geocode_city(query: str) -> Optional[Dict]:
 OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_pois(lat: float, lon: float, radius_m: int = 2500, kind: str = "landmark", limit: int = 30) -> List[Dict]:
+def fetch_pois(lat: float, lon: float, radius_m: int = 2500, limit: int = 30) -> List[Dict]:
     try:
         q = f"[out:json][timeout:20];node[tourism=attraction](around:{radius_m},{lat},{lon});out center {limit};"
         r = requests.post(OVERPASS_ENDPOINT, data={"data": q}, timeout=20)
@@ -189,18 +175,24 @@ def safe_json_parse(text: str) -> Dict:
 def generate_itinerary_groq(city: str, area: Optional[str], start: date, end: date,
                           lat: float, lon: float, interests: List[str], amount: int) -> Tuple[str, List[Dict]]:
     days = max((end - start).days, 1)
-    osm_places = fetch_pois(lat, lon, 3000, "landmark", 40)
+    osm_places = fetch_pois(lat, lon, 3000, 40)
     place_names = [p["name"] for p in osm_places]
 
     prompt = (
         "You are a travel planner.\n"
-        "TASK: Create an itinerary with exactly one activity for Morning, Afternoon, Evening per day.\n"
         f"City: {city}, Area: {area or '—'}, Days: {days}, Interests: {', '.join(interests)}.\n"
         f"Budget per day: {amount} USD.\n"
-        f"Allowed places: {place_names}.\n"
-        "Return valid JSON in this schema:\n"
-        "{\"days\":[{\"Morning\":[{\"name\":str}],\"Afternoon\":[{\"name\":str}],\"Evening\":[{\"name\":str}],\"daily_notes\":str}],\"notes\":str}\n"
-        "ABSOLUTE RULES: Output JSON only. No text, no explanations, no markdown. If unsure, output {}."
+        f"Allowed places: {place_names}.\n\n"
+        "TASK: Create an itinerary with exactly one activity for Morning, Afternoon, and Evening per day.\n"
+        "Each item must have a 'name'. Also include a short 'daily_notes' per day.\n\n"
+        "Return ONLY valid JSON. Do not add explanations, markdown, or text outside JSON.\n"
+        "Schema:\n"
+        "{\n"
+        "  \"days\": [\n"
+        "    {\"Morning\":[{\"name\":str}],\"Afternoon\":[{\"name\":str}],\"Evening\":[{\"name\":str}],\"daily_notes\":str}\n"
+        "  ],\n"
+        "  \"notes\": str\n"
+        "}"
     )
 
     raw = groq_generate_text(prompt, max_new_tokens=600, temperature=0.4)
@@ -209,7 +201,7 @@ def generate_itinerary_groq(city: str, area: Optional[str], start: date, end: da
     if not data or "days" not in data:
         st.warning("Could not parse model output, falling back to simple itinerary.")
         return f"## {city} Itinerary ({days} days)", [
-            {"Morning": osm_places[:1], "Afternoon": osm_places[1:2], "Evening": osm_places[2:3]}
+            {"Morning": osm_places[:1], "Afternoon": osm_places[1:2], "Evening": osm_places[2:3], "daily_notes": ""}
         ]
 
     return f"## {city} Itinerary ({days} days)", data.get("days", [])
@@ -240,30 +232,33 @@ if show_debug and st.button("🧪 Test Groq"):
 if go:
     if not city:
         st.error("Enter a city."); st.stop()
-        with st.spinner("Building your plan…"):
-            geo = geocode_city(city)
-            if not geo:
-                st.error("Could not find that destination.")
-                st.stop()
+    with st.spinner("Building your plan…"):
+        geo = geocode_city(city)
+        if not geo:
+            st.error("Could not find that destination.")
+            st.stop()
 
-            header, days_plan = generate_itinerary_groq(
-                city=city, area=area, start=start_date, end=end_date,
-                lat=geo["lat"], lon=geo["lon"],
-                interests=interests, amount=budget
+        header, days_plan = generate_itinerary_groq(
+            city=city, area=area, start=start_date, end=end_date,
+            lat=geo["lat"], lon=geo["lon"],
+            interests=interests, amount=budget
         )
 
-            st.subheader("🗓️ Itinerary")
-            if header:
-                st.markdown(header)
-            if days_plan:
-                for i, day in enumerate(days_plan, 1):
-                    st.markdown(f"### Day {i}")
-                    for slot in ["Morning", "Afternoon", "Evening"]:
-                        items = day.get(slot, [])
-                        if items:
-                            name = items[0].get("name", "")
-                            st.markdown(f"- **{slot}**: {name}")
-                    if "daily_notes" in day and day["daily_notes"]:
-                        st.caption(day["daily_notes"])
+    st.subheader("🗓️ Itinerary")
+    if header:
+        st.markdown(header)
+
+    if not days_plan:
+        st.warning("No plan generated. Try again or change inputs.")
+    else:
+        for i, day in enumerate(days_plan, 1):
+            st.markdown(f"### Day {i}")
+            for slot in ["Morning", "Afternoon", "Evening"]:
+                items = day.get(slot, [])
+                if items:
+                    name = items[0].get("name", "")
+                    st.markdown(f"- **{slot}**: {name}")
+            if "daily_notes" in day and day["daily_notes"]:
+                st.caption(day["daily_notes"])
 else:
     st.info("Enter details and click **Build Plan**.")
