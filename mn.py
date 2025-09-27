@@ -1,13 +1,7 @@
 import os
-import re
-import json
-import requests
-import urllib.parse
-import streamlit as st
 from datetime import date, timedelta
-from typing import Optional, List, Dict
-from bs4 import BeautifulSoup
-from groq import Groq
+import streamlit as st
+from langchain_openai import ChatOpenAI
 
 # ================================
 # Page Config + Theme
@@ -21,150 +15,53 @@ st.markdown("""
     h2, h3 { color: #3B4CCA; }
     section[data-testid="stSidebar"] { background-color: #3B4CCA; color: white; }
     section[data-testid="stSidebar"] * { color: white !important; }
+    div.stButton > button {
+        background-color: #FF1C1C; color: white;
+        border-radius: 8px; border: 2px solid #3B4CCA; font-weight: bold;
+    }
+    div.stButton > button:hover {
+        background-color: #FFCC00; color: #2C2C2C; border: 2px solid #FF1C1C;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🧭 MonTravels")
+st.title("🧭 MonTravels – Smart Itinerary Builder")
 
 # ================================
-# Groq Client
+# Initialize Groq (via LangChain)
 # ================================
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+llm = ChatOpenAI(
+    model="llama-3.1-8b-instant",   # You can also try "llama-3.1-70b-versatile"
+    api_key=os.getenv("GROQ_API_KEY"),
+    openai_api_base="https://api.groq.com/openai/v1",
+    temperature=0.4,
+    max_tokens=800,
+)
 
 # ================================
-# Geocoding (city + area)
+# Function to generate itinerary
 # ================================
-@st.cache_data(ttl=3600, show_spinner=False)
-def geocode_city(city: str, area: Optional[str] = None) -> Optional[Dict]:
-    q = f"{area}, {city}" if area else city
-    try:
-        r = requests.get("https://nominatim.openstreetmap.org/search",
-                         params={"q": q, "format": "json", "limit": 1},
-                         headers={"User-Agent": "MonTravels/1.0"}, timeout=8)
-        if r.ok:
-            js = r.json() or []
-            if js:
-                return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0]["display_name"]}
-    except Exception:
-        return None
-    return None
-
-# ================================
-# Overpass API (OSM POIs)
-# ================================
-OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
-
-def fetch_pois(lat: float, lon: float, radius_m: int = 3000, limit: int = 40) -> List[Dict]:
-    q = f"""
-    [out:json][timeout:25];
-    (
-      node["tourism"](around:{radius_m},{lat},{lon});
-      node["amenity"](around:{radius_m},{lat},{lon});
-      node["historic"](around:{radius_m},{lat},{lon});
-    );
-    out center {limit};
-    """
-    try:
-        r = requests.post(OVERPASS_ENDPOINT, data={"data": q}, timeout=25)
-        r.raise_for_status()
-        elements = r.json().get("elements", [])
-        out = []
-        for e in elements:
-            tags = e.get("tags", {})
-            name = tags.get("name")
-            if name:
-                out.append({"name": name, "lat": e.get("lat"), "lon": e.get("lon")})
-        return out[:limit]
-    except Exception:
-        return []
-
-# ================================
-# TripAdvisor Scraper
-# ================================
-@st.cache_data(ttl=3600, show_spinner=False)
-def scrape_tripadvisor(city: str, area: Optional[str] = None) -> List[str]:
-    try:
-        query = f"{area} {city}" if area else city
-        city_q = urllib.parse.quote_plus(query)
-        url = f"https://www.tripadvisor.com/Search?q={city_q}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=10)
-        if not r.ok:
-            return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        places = [tag.get_text(strip=True) for tag in soup.select("div.result-title")]
-        return places[:15]
-    except Exception:
-        return []
-
-# ================================
-# Safe JSON Parse
-# ================================
-def safe_json_parse(text: str) -> Dict:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(json)?", "", text, flags=re.IGNORECASE).strip()
-        text = text.rstrip("```").strip()
-    try:
-        return json.loads(text)
-    except:
-        pass
-    m = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except:
-            pass
-    return {}
-
-# ================================
-# Generate Itinerary with Groq
-# ================================
-def generate_itinerary_groq(city: str, area: Optional[str], start: date, end: date,
-                            lat: float, lon: float, interests: List[str], amount: int, adults: int) -> Dict:
+def generate_itinerary(city, area, start, end, interests, budget, adults):
     days = max((end - start).days, 1)
+    prompt = f"""
+    You are an expert travel planner.
 
-    osm_places = fetch_pois(lat, lon, 3000, 40)
-    trip_places = scrape_tripadvisor(city, area)
-    place_names = [p["name"] for p in osm_places] + trip_places
+    Make me a {days}-day itinerary for {city}, {area or ''}.
+    Focus on interests: {', '.join(interests)}.
+    Budget: ${budget} per day.
+    Adults traveling: {adults}.
 
-    prompt = (
-        "You are an expert travel planner.\n"
-        f"Destination: {city}, Area: {area or '—'}\n"
-        f"Trip Length: {days} days, Adults: {adults}\n"
-        f"Interests: {', '.join(interests)}\n"
-        f"Budget per day: ${amount}\n\n"
-        "Candidate Places (from OpenStreetMap + TripAdvisor near the given Area):\n"
-        f"{place_names}\n\n"
-        "TASK:\n"
-        "1. Build a full travel itinerary for the given number of days.\n"
-        "2. Each day must include exactly one activity for Morning, Afternoon, and Evening.\n"
-        "3. Prioritize places close to the given Area for walkability.\n"
-        "4. Ensure variety across days (no repeating the same spots).\n"
-        "5. Add a short 'daily_notes' about budget or travel tips.\n\n"
-        "OUTPUT RULES:\n"
-        "- Return ONLY valid JSON.\n"
-        "- Schema:\n"
-        "{\n"
-        "  \"days\": [\n"
-        "    {\"Morning\": [{\"name\": str}], \"Afternoon\": [{\"name\": str}], \"Evening\": [{\"name\": str}], \"daily_notes\": str}\n"
-        "  ],\n"
-        "  \"notes\": str\n"
-        "}\n"
-    )
-
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
-        max_tokens=900,
-    )
-
-    raw = response.choices[0].message.content
-    return safe_json_parse(raw)
+    Include:
+    - Morning, Afternoon, and Evening activities each day.
+    - Mix of food, culture, and history (based on interests).
+    - Stay within budget with practical tips.
+    - Add short daily notes at the end of each day.
+    """
+    resp = llm.invoke(prompt)
+    return resp.content
 
 # ================================
-# Sidebar UI
+# Sidebar Inputs
 # ================================
 with st.sidebar:
     city = st.text_input("Destination*").strip()
@@ -178,31 +75,17 @@ with st.sidebar:
     go = st.button("✨ Build Plan")
 
 # ================================
-# Action
+# Main Action
 # ================================
 if go:
     if not city:
-        st.error("Enter a city."); st.stop()
-    geo = geocode_city(city, area)
-    if not geo:
-        st.error(f"Could not find that destination: {city} {area}"); st.stop()
+        st.error("Please enter a destination.")
+        st.stop()
 
-    with st.spinner("Building itinerary..."):
-        data = generate_itinerary_groq(city, area, start_date, end_date,
-                                       geo["lat"], geo["lon"], interests, budget, adults)
+    with st.spinner("Building your personalized itinerary..."):
+        itinerary = generate_itinerary(city, area, start_date, end_date, interests, budget, adults)
 
-    if not data or "days" not in data:
-        st.error("Model did not return a valid itinerary.")
-    else:
-        st.subheader("🗓️ Your Itinerary")
-        for i, d in enumerate(data["days"], 1):
-            st.markdown(f"### Day {i}")
-            for part in ["Morning","Afternoon","Evening"]:
-                items = d.get(part, [])
-                if items:
-                    st.write(f"- **{part}**: {items[0]['name']}")
-            st.caption(d.get("daily_notes", ""))
-        st.subheader("📝 Notes")
-        st.write(data.get("notes",""))
+    st.subheader("🗓️ Your Itinerary")
+    st.write(itinerary)
 else:
-    st.info("Enter details and click **Build Plan**.")
+    st.info("Enter details in the sidebar and click **Build Plan**.")
