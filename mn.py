@@ -26,17 +26,23 @@ def apply_theme():
         h1 { color: #FFCC00; text-shadow: 2px 2px 0px #3B4CCA; }
         h2, h3 { color: #3B4CCA; }
 
+        section[data-testid="stSidebar"] { background-color: #3B4CCA; color: white; }
+        section[data-testid="stSidebar"] * { color: white !important; }
+
         section[data-testid="stSidebar"] input,
         section[data-testid="stSidebar"] textarea,
         section[data-testid="stSidebar"] select,
         section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] div,
         section[data-testid="stSidebar"] .stNumberInput input,
         section[data-testid="stSidebar"] .stDateInput input {
-        color: #000000 !important;          /* make text always black */
-        background-color: #eef2ff !important;
-        border-radius: 10px !important;
-}
-        section[data-testid="stSidebar"] * { color: white !important; }
+            color: #000000 !important;          /* always black text */
+            background-color: #eef2ff !important;
+            border-radius: 10px !important;
+        }
+        section[data-testid="stSidebar"] input::placeholder,
+        section[data-testid="stSidebar"] textarea::placeholder {
+            color: #555555 !important;   /* gray placeholder */
+        }
 
         div.stButton > button {
             background-color: #FF1C1C; color: white;
@@ -45,10 +51,6 @@ def apply_theme():
         div.stButton > button:hover {
             background-color: #FFCC00; color: #2C2C2C; border: 2px solid #FF1C1C;
         }
-        .card { background-color: #FFFFFF; border-radius: 14px; padding: 12px; margin-bottom: 10px;
-                border: 1px solid #FFD84D; box-shadow: 1px 2px 5px rgba(0,0,0,0.06); }
-        a { color: #3B4CCA; text-decoration: none; font-weight: bold; }
-        a:hover { color: #FF1C1C; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -107,26 +109,58 @@ def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adul
             f"&group_adults={adults}&no_rooms=1&group_children=0&lang=en-us&_mtu={_cachebuster(city_or_area)}")
 
 # ================================
-# Geocoding
+# Geocoding with fallbacks
 # ================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def geocode_city(query: str) -> Optional[Dict]:
     q = (query or "").strip()
     if not q: return None
+    headers = {"User-Agent": "MonTravelsApp/1.0"}
+
+    # 1. Nominatim
     try:
         r = requests.get("https://nominatim.openstreetmap.org/search",
                          params={"q": q, "format": "json", "limit": 1},
-                         headers={"User-Agent": "MonTravels/1.0"}, timeout=8)
+                         headers=headers, timeout=8)
         if r.ok:
             js = r.json() or []
             if js:
                 return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0]["display_name"]}
     except Exception:
         pass
+
+    # 2. Maps.co
+    try:
+        r = requests.get("https://geocode.maps.co/search",
+                         params={"q": q, "limit": 1},
+                         headers=headers, timeout=8)
+        if r.ok:
+            js = r.json() or []
+            if js:
+                return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0].get("display_name") or q}
+    except Exception:
+        pass
+
+    # 3. Photon (Komoot)
+    try:
+        r = requests.get("https://photon.komoot.io/api/",
+                         params={"q": q, "limit": 1},
+                         headers=headers, timeout=8)
+        if r.ok:
+            js = r.json() or {}
+            feats = (js.get("features") or [])
+            if feats:
+                coords = feats[0]["geometry"]["coordinates"]
+                props = feats[0].get("properties", {})
+                name = props.get("name") or props.get("city") or props.get("country") or q
+                return {"lat": float(coords[1]), "lon": float(coords[0]), "name": name}
+    except Exception:
+        pass
+
     return None
 
 # ================================
-# OSM POIs
+# OSM POIs (basic)
 # ================================
 OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
 
@@ -149,7 +183,7 @@ def fetch_pois(lat: float, lon: float, radius_m: int = 2500, kind: str = "landma
         return []
 
 # ================================
-# Itinerary Generation with Groq
+# Itinerary with Groq
 # ================================
 def generate_itinerary_groq(city: str, area: Optional[str], start: date, end: date,
                           lat: float, lon: float, interests: List[str], amount: int) -> Tuple[str, List[Dict]]:
