@@ -252,8 +252,22 @@ if go:
             interests=interests, amount=budget
         )
 
-    st.subheader("🗓️ Itinerary")
-    st.markdown(header)
+st.subheader("🗓️ Itinerary")
+st.markdown(header)
+
+for i, day in enumerate(days_plan, 1):
+    st.markdown(f"### Day {i}")
+    
+    for slot in ["Morning", "Afternoon", "Evening"]:
+        items = day.get(slot, [])
+        if items:
+            name = items[0].get("name", "")
+            st.markdown(f"- **{slot}**: {name}")
+    
+    # Daily notes
+    if "daily_notes" in day and day["daily_notes"]:
+        st.caption(day["daily_notes"])
+        
     st.json(days_plan)
 else:
     st.info("Enter details and click **Build Plan**.")
