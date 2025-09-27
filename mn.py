@@ -1,3 +1,4 @@
+
 import os
 import re
 import json
@@ -84,30 +85,22 @@ def _cachebuster(seed: str) -> str:
 # Geocoding with fallbacks
 # ================================
 @st.cache_data(ttl=3600, show_spinner=False)
-def geocode_city(query: str) -> Optional[Dict]:
-    q = (query or "").strip()
-    if not q: return None
-    headers = {"User-Agent": "MonTravelsApp/1.0"}
-
-    urls = [
-        ("https://nominatim.openstreetmap.org/search", {"q": q, "format": "json", "limit": 1}),
-        ("https://geocode.maps.co/search", {"q": q, "limit": 1}),
-        ("https://photon.komoot.io/api/", {"q": q, "limit": 1})
-    ]
-
-    for url, params in urls:
-        try:
-            r = requests.get(url, params=params, headers=headers, timeout=8)
-            if r.ok:
-                js = r.json()
-                if isinstance(js, list) and js:
-                    return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0].get("display_name", q)}
-                elif isinstance(js, dict) and "features" in js and js["features"]:
-                    coords = js["features"][0]["geometry"]["coordinates"]
-                    props = js["features"][0].get("properties", {})
-                    return {"lat": float(coords[1]), "lon": float(coords[0]), "name": props.get("name", q)}
-        except:
-            continue
+def geocode_city(city: str, area: Optional[str] = None) -> Optional[Dict]:
+    q = f"{area}, {city}" if area else city
+    try:
+        r = requests.get("https://nominatim.openstreetmap.org/search",
+                         params={"q": q, "format": "json", "limit": 1},
+                         headers={"User-Agent": "MonTravels/1.0"}, timeout=8)
+        if r.ok:
+            js = r.json() or []
+            if js:
+                return {
+                    "lat": float(js[0]["lat"]),
+                    "lon": float(js[0]["lon"]),
+                    "name": js[0]["display_name"]
+                }
+    except Exception:
+        return None
     return None
 
 # ================================
@@ -185,21 +178,21 @@ def generate_itinerary_groq(city: str, area: Optional[str], start: date, end: da
     place_names = [p["name"] for p in osm_places] + trip_places
 
     prompt = (
-        "You are a travel planner.\n"
-        f"City: {city}, Area: {area or '—'}, Days: {days}, Interests: {', '.join(interests)}.\n"
-        f"Budget per day: {amount} USD.\n"
-        f"Allowed places: {place_names}.\n\n"
-        "TASK: Create an itinerary with exactly one activity for Morning, Afternoon, and Evening per day.\n"
-        "Each item must have a 'name'. Also include a short 'daily_notes' per day.\n\n"
-        "Return ONLY valid JSON. Do not add explanations, markdown, or text outside JSON.\n"
-        "Schema:\n"
-        "{\n"
-        "  \"days\": [\n"
-        "    {\"Morning\":[{\"name\":str}],\"Afternoon\":[{\"name\":str}],\"Evening\":[{\"name\":str}],\"daily_notes\":str}\n"
-        "  ],\n"
-        "  \"notes\": str\n"
-        "}"
-    )
+    "You are an expert travel planner.\n"
+    f"Destination: {city}, Area: {area or '—'}\n"
+    f"Trip Length: {days} days, Adults: {adults}\n"
+    f"Interests: {', '.join(interests)}\n"
+    f"Budget per day: ${amount}\n\n"
+    "Candidate Places (from OpenStreetMap + TripAdvisor near the given Area):\n"
+    f"{place_names}\n\n"
+    "TASK:\n"
+    "1. Build a full travel itinerary based on this specific Area.\n"
+    "2. Each day must have Morning, Afternoon, Evening.\n"
+    "3. Use places close to the Area for walkability.\n"
+    "4. Ensure variety (no repeating the same spots).\n"
+    "5. Add a 'daily_notes' about budget/travel tips.\n"
+    "OUTPUT JSON ONLY.\n"
+)                        
 
     raw = groq_generate_text(prompt, max_new_tokens=600, temperature=0.4)
     data = safe_json_parse(raw)
