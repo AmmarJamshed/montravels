@@ -20,9 +20,8 @@ st.markdown("""
     div.stButton > button:hover {
         background-color: #FFCC00; color: #2C2C2C; border: 2px solid #FF1C1C;
     }
-    /* Sidebar Styling */
     section[data-testid="stSidebar"] { background-color: #3B4CCA; color: white; }
-    section[data-testid="stSidebar"] label, 
+    section[data-testid="stSidebar"] label,
     section[data-testid="stSidebar"] span,
     section[data-testid="stSidebar"] div[role="button"] {
         color: white !important;
@@ -34,6 +33,12 @@ st.markdown("""
         background-color: #eef2ff !important;
         border-radius: 6px !important;
     }
+    .agent-card {
+        background-color: white; padding: 15px; margin: 10px 0;
+        border-radius: 10px; box-shadow: 0px 2px 5px rgba(0,0,0,0.1);
+    }
+    .agent-card h4 { color: #3B4CCA; margin-bottom: 5px; }
+    .agent-card p { margin: 2px 0; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -43,11 +48,11 @@ st.title("🧭 MonTravels – Travel with Wisdom")
 # Initialize Groq (via LangChain)
 # ================================
 llm = ChatOpenAI(
-    model="llama-3.1-8b-instant",   # or try "llama-3.1-70b-versatile"
+    model="llama-3.1-8b-instant",
     api_key=os.getenv("GROQ_API_KEY"),
     openai_api_base="https://api.groq.com/openai/v1",
     temperature=0.4,
-    max_tokens=800,
+    max_tokens=1200,
 )
 
 # ================================
@@ -58,16 +63,17 @@ def generate_itinerary(city, area, start, end, interests, budget, adults):
     prompt = f"""
     You are an expert travel planner.
 
-    Make me a {days}-day itinerary for {city}, {area or ''}.
+    Create a detailed {days}-day travel itinerary for {city}, {area or ''}.
+    MUST include exactly {days} full days (Day 1, Day 2, etc).
+    
+    For each day:
+    - Morning, Afternoon, and Evening activities
+    - Meals with budget-friendly suggestions
+    - Practical tips
+    - Daily notes
+    
     Focus on interests: {', '.join(interests)}.
-    Budget: ${budget} per day.
-    Adults traveling: {adults}.
-
-    Include:
-    - Morning, Afternoon, and Evening activities each day.
-    - Mix of food, culture, and history (based on interests).
-    - Stay within budget with practical tips.
-    - Add short daily notes at the end of each day.
+    Budget: ${budget} per day for {adults} adults.
     """
     resp = llm.invoke(prompt)
     return resp.content
@@ -84,8 +90,8 @@ with st.sidebar:
     adults  = st.number_input("Adults", 1, 10, 2)
     budget  = st.number_input("Budget ($/day)", 10, 1000, 100)
     interests = st.multiselect(
-        "Interests", 
-        ["food","history","museums","nature","nightlife"], 
+        "Interests",
+        ["food","history","museums","nature","nightlife"],
         default=["food","history"]
     )
     go = st.button("✨ Build Plan")
@@ -109,19 +115,19 @@ if go:
         st.subheader("🗓️ Your Itinerary")
         st.write(itinerary)
 
-    # --- RIGHT: Booking & Agents ---
+    # --- RIGHT: Hotels + Agents ---
     with col2:
-        st.subheader("🏨 Book Your Stay")
-
-        # Booking.com deeplink
+        st.subheader("🏨 Suggested Hotels & Lodges")
         checkin = start_date.strftime("%Y-%m-%d")
         checkout = end_date.strftime("%Y-%m-%d")
-        booking_url = f"https://www.booking.com/searchresults.html?ss={city}&checkin={checkin}&checkout={checkout}&group_adults={adults}"
-        st.markdown(f"[🔗 Booking.com Hotels in {city}]({booking_url})")
 
-        # Airbnb deeplink
-        airbnb_url = f"https://www.airbnb.com/s/{city}/homes?checkin={checkin}&checkout={checkout}&adults={adults}"
-        st.markdown(f"[🔗 Airbnb Stays in {city}]({airbnb_url})")
+        hotels = [
+            {"name": f"{city} Central Lodge", "link": f"https://www.booking.com/searchresults.html?ss={city}+{area}&checkin={checkin}&checkout={checkout}&group_adults={adults}"},
+            {"name": f"{city} Heritage Inn", "link": f"https://www.airbnb.com/s/{city}-{area}/homes?checkin={checkin}&checkout={checkout}&adults={adults}"},
+            {"name": f"{city} Boutique Hotel", "link": f"https://www.booking.com/searchresults.html?ss={city}&checkin={checkin}&checkout={checkout}&group_adults={adults}"},
+        ]
+        for h in hotels:
+            st.markdown(f"🔗 [{h['name']}]({h['link']})")
 
         st.subheader("✈️ Travel Agents")
         agents = [
@@ -129,9 +135,13 @@ if go:
             {"name": "SkyHigh Travels", "desc": "Custom itineraries & visa support", "email": "bookings@skyhigh.com"}
         ]
         for a in agents:
-            st.markdown(f"**{a['name']}** – {a['desc']}")
-            st.markdown(f"[📧 Contact {a['name']}](mailto:{a['email']}?subject=MonTravels {city} Trip)")
-            st.markdown("---")
+            st.markdown(f"""
+            <div class="agent-card">
+                <h4>{a['name']}</h4>
+                <p>{a['desc']}</p>
+                <p><a href="mailto:{a['email']}?subject=MonTravels {city} Trip">📧 Contact</a></p>
+            </div>
+            """, unsafe_allow_html=True)
 
 else:
     st.info("Enter details in the sidebar and click **Build Plan**.")
