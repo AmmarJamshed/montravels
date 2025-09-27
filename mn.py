@@ -1,5 +1,6 @@
 import os
 from datetime import date, timedelta
+import requests
 import streamlit as st
 from langchain_openai import ChatOpenAI
 
@@ -45,6 +46,11 @@ st.markdown("""
 st.title("🧭 MonTravels – Travel with Wisdom")
 
 # ================================
+# Keys
+# ================================
+RAPIDAPI_KEY = st.secrets["RAPIDAPI_KEY"]
+
+# ================================
 # Initialize Groq (via LangChain)
 # ================================
 llm = ChatOpenAI(
@@ -54,6 +60,65 @@ llm = ChatOpenAI(
     temperature=0.4,
     max_tokens=1200,
 )
+
+# ================================
+# RapidAPI Hotel Functions
+# ================================
+def get_dest_id(city, area=""):
+    """
+    Fetch dest_id for Booking.com searches
+    """
+    url = "https://booking-com.p.rapidapi.com/v1/hotels/locations"
+    headers = {
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "booking-com.p.rapidapi.com"
+    }
+    query = f"{city} {area}".strip()
+    resp = requests.get(url, headers=headers, params={"name": query, "locale": "en-us"})
+    if resp.status_code != 200:
+        return None
+    data = resp.json()
+    if len(data) > 0:
+        return data[0].get("dest_id")
+    return None
+
+def fetch_hotels(city, area, checkin, checkout, adults=2, limit=5):
+    """
+    Fetch hotels by city/area from Booking.com API
+    """
+    dest_id = get_dest_id(city, area)
+    if not dest_id:
+        return [{"name": "No hotels found", "link": ""}]
+
+    url = "https://booking-com.p.rapidapi.com/v1/hotels/search"
+    headers = {
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "booking-com.p.rapidapi.com"
+    }
+    params = {
+        "checkout_date": checkout,
+        "checkin_date": checkin,
+        "adults_number": adults,
+        "order_by": "popularity",
+        "dest_type": "city",
+        "units": "metric",
+        "room_number": "1",
+        "locale": "en-us",
+        "dest_id": dest_id,
+        "filter_by_currency": "USD"
+    }
+    resp = requests.get(url, headers=headers, params=params)
+    if resp.status_code != 200:
+        return [{"name": "Hotel search unavailable", "link": ""}]
+
+    data = resp.json()
+    hotels = []
+    for h in data.get("result", [])[:limit]:
+        hotels.append({
+            "name": h.get("hotel_name", "Unnamed Hotel"),
+            "link": h.get("url", "https://booking.com")
+        })
+    return hotels
 
 # ================================
 # Function to generate itinerary
@@ -120,12 +185,8 @@ if go:
         st.subheader("🏨 Suggested Hotels & Lodges")
         checkin = start_date.strftime("%Y-%m-%d")
         checkout = end_date.strftime("%Y-%m-%d")
+        hotels = fetch_hotels(city, area, checkin, checkout, adults)
 
-        hotels = [
-            {"name": f"{city} Central Lodge", "link": f"https://www.booking.com/searchresults.html?ss={city}+{area}&checkin={checkin}&checkout={checkout}&group_adults={adults}"},
-            {"name": f"{city} Heritage Inn", "link": f"https://www.airbnb.com/s/{city}-{area}/homes?checkin={checkin}&checkout={checkout}&adults={adults}"},
-            {"name": f"{city} Boutique Hotel", "link": f"https://www.booking.com/searchresults.html?ss={city}&checkin={checkin}&checkout={checkout}&group_adults={adults}"},
-        ]
         for h in hotels:
             st.markdown(f"🔗 [{h['name']}]({h['link']})")
 
