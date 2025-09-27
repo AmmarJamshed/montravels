@@ -1,5 +1,6 @@
+lxml
 streamlit
-langchain
-langchain-community
-langchain-openai
 requests
+beautifulsoup4
+groq
+python-dotenv
