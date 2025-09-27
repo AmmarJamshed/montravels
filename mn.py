@@ -1,16 +1,15 @@
 import os
 import re
-import math
 import json
 import time
 import hashlib
+import urllib.parse
 from datetime import date, timedelta
 from typing import Optional, List, Dict, Tuple
-import urllib.parse
+
 import requests
 import streamlit as st
-
-# LangChain Groq
+from bs4 import BeautifulSoup
 from langchain_openai import ChatOpenAI
 
 # ================================
@@ -60,7 +59,6 @@ st.title("🧭 MonTravels")
 # Groq LLM
 # ================================
 def groq_generate_text(prompt: str, max_new_tokens: int = 600, temperature: float = 0.4) -> str:
-    """Generate text using Groq API via LangChain."""
     llm = ChatOpenAI(
         model="llama-3.1-8b-instant",
         api_key=os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY"),
@@ -91,47 +89,29 @@ def geocode_city(query: str) -> Optional[Dict]:
     if not q: return None
     headers = {"User-Agent": "MonTravelsApp/1.0"}
 
-    try:
-        r = requests.get("https://nominatim.openstreetmap.org/search",
-                         params={"q": q, "format": "json", "limit": 1},
-                         headers=headers, timeout=8)
-        if r.ok:
-            js = r.json() or []
-            if js:
-                return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0]["display_name"]}
-    except Exception:
-        pass
+    urls = [
+        ("https://nominatim.openstreetmap.org/search", {"q": q, "format": "json", "limit": 1}),
+        ("https://geocode.maps.co/search", {"q": q, "limit": 1}),
+        ("https://photon.komoot.io/api/", {"q": q, "limit": 1})
+    ]
 
-    try:
-        r = requests.get("https://geocode.maps.co/search",
-                         params={"q": q, "limit": 1},
-                         headers=headers, timeout=8)
-        if r.ok:
-            js = r.json() or []
-            if js:
-                return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0].get("display_name") or q}
-    except Exception:
-        pass
-
-    try:
-        r = requests.get("https://photon.komoot.io/api/",
-                         params={"q": q, "limit": 1},
-                         headers=headers, timeout=8)
-        if r.ok:
-            js = r.json() or {}
-            feats = (js.get("features") or [])
-            if feats:
-                coords = feats[0]["geometry"]["coordinates"]
-                props = feats[0].get("properties", {})
-                name = props.get("name") or props.get("city") or props.get("country") or q
-                return {"lat": float(coords[1]), "lon": float(coords[0]), "name": name}
-    except Exception:
-        pass
-
+    for url, params in urls:
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=8)
+            if r.ok:
+                js = r.json()
+                if isinstance(js, list) and js:
+                    return {"lat": float(js[0]["lat"]), "lon": float(js[0]["lon"]), "name": js[0].get("display_name", q)}
+                elif isinstance(js, dict) and "features" in js and js["features"]:
+                    coords = js["features"][0]["geometry"]["coordinates"]
+                    props = js["features"][0].get("properties", {})
+                    return {"lat": float(coords[1]), "lon": float(coords[0]), "name": props.get("name", q)}
+        except:
+            continue
     return None
 
 # ================================
-# OSM POIs (basic)
+# OSM POIs
 # ================================
 OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
 
@@ -154,13 +134,37 @@ def fetch_pois(lat: float, lon: float, radius_m: int = 2500, limit: int = 30) ->
         return []
 
 # ================================
-# Safe JSON parsing
+# TripAdvisor scraping
+# ================================
+@st.cache_data(ttl=3600, show_spinner=False)
+def scrape_tripadvisor(city: str) -> List[str]:
+    try:
+        city_q = urllib.parse.quote_plus(city)
+        url = f"https://www.tripadvisor.com/Search?q={city_q}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        if not r.ok: return []
+        soup = BeautifulSoup(r.text, "html.parser")
+        places = [tag.get_text(strip=True) for tag in soup.select("div.result-title")]
+        return places[:15]
+    except Exception as e:
+        st.warning(f"TripAdvisor scraping failed: {e}")
+        return []
+
+# ================================
+# JSON parsing
 # ================================
 def safe_json_parse(text: str) -> Dict:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(json)?", "", text, flags=re.IGNORECASE).strip()
+        text = text.rstrip("```").strip()
+
     try:
         return json.loads(text)
     except:
         pass
+
     m = re.search(r"\{.*\}", text, flags=re.DOTALL)
     if m:
         try:
@@ -170,13 +174,15 @@ def safe_json_parse(text: str) -> Dict:
     return {}
 
 # ================================
-# Itinerary with Groq
+# Itinerary generation
 # ================================
 def generate_itinerary_groq(city: str, area: Optional[str], start: date, end: date,
                           lat: float, lon: float, interests: List[str], amount: int) -> Tuple[str, List[Dict]]:
     days = max((end - start).days, 1)
+
     osm_places = fetch_pois(lat, lon, 3000, 40)
-    place_names = [p["name"] for p in osm_places]
+    trip_places = scrape_tripadvisor(city)
+    place_names = [p["name"] for p in osm_places] + trip_places
 
     prompt = (
         "You are a travel planner.\n"
