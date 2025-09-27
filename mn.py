@@ -35,7 +35,7 @@ def apply_theme():
         section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] div,
         section[data-testid="stSidebar"] .stNumberInput input,
         section[data-testid="stSidebar"] .stDateInput input {
-            color: #000000 !important;          /* always black text */
+            color: #000000 !important;          /* black text */
             background-color: #eef2ff !important;
             border-radius: 10px !important;
         }
@@ -63,7 +63,7 @@ st.title("🧭 MonTravels")
 def groq_generate_text(prompt: str, max_new_tokens: int = 600, temperature: float = 0.4) -> str:
     """Generate text using Groq API via LangChain."""
     llm = ChatOpenAI(
-        model="llama-3.1-8b-instant",   # ✅ working Groq model
+        model="llama-3.1-8b-instant",
         api_key=os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY"),
         openai_api_base="https://api.groq.com/openai/v1",
         temperature=temperature,
@@ -92,21 +92,6 @@ def combined_query(city: str, area: Optional[str]) -> str:
 def _cachebuster(seed: str) -> str:
     raw = f"{seed}-{time.time_ns()}"
     return hashlib.md5(raw.encode()).hexdigest()[:10]
-
-def external_link_button(label: str, url: str):
-    st.markdown(
-        f'<a target="_blank" rel="noopener" href="{url}" style="text-decoration:none;"><button class="stButton">{label}</button></a>',
-        unsafe_allow_html=True
-    )
-
-# ================================
-# Booking deeplinks
-# ================================
-def deeplink_booking_city(city_or_area: str, checkin: date, checkout: date, adults: int = 2) -> str:
-    q = urllib.parse.quote(city_or_area)
-    return ("https://www.booking.com/searchresults.html"
-            f"?ss={q}&checkin={checkin:%Y-%m-%d}&checkout={checkout:%Y-%m-%d}"
-            f"&group_adults={adults}&no_rooms=1&group_children=0&lang=en-us&_mtu={_cachebuster(city_or_area)}")
 
 # ================================
 # Geocoding with fallbacks
@@ -183,6 +168,22 @@ def fetch_pois(lat: float, lon: float, radius_m: int = 2500, kind: str = "landma
         return []
 
 # ================================
+# Safe JSON parsing
+# ================================
+def safe_json_parse(text: str) -> Dict:
+    try:
+        return json.loads(text)
+    except:
+        pass
+    m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except:
+            pass
+    return {}
+
+# ================================
 # Itinerary with Groq
 # ================================
 def generate_itinerary_groq(city: str, area: Optional[str], start: date, end: date,
@@ -198,16 +199,18 @@ def generate_itinerary_groq(city: str, area: Optional[str], start: date, end: da
         f"Budget per day: {amount} USD.\n"
         f"Allowed places: {place_names}.\n"
         "Return valid JSON in this schema:\n"
-        "{\"days\":[{\"Morning\":[{\"name\":str}],\"Afternoon\":[{\"name\":str}],\"Evening\":[{\"name\":str}],\"daily_notes\":str}],\"notes\":str}"
+        "{\"days\":[{\"Morning\":[{\"name\":str}],\"Afternoon\":[{\"name\":str}],\"Evening\":[{\"name\":str}],\"daily_notes\":str}],\"notes\":str}\n"
+        "ABSOLUTE RULES: Output JSON only. No text, no explanations, no markdown. If unsure, output {}."
     )
 
     raw = groq_generate_text(prompt, max_new_tokens=600, temperature=0.4)
+    data = safe_json_parse(raw)
 
-    try:
-        data = json.loads(raw)
-    except Exception:
+    if not data or "days" not in data:
         st.warning("Could not parse model output, falling back to simple itinerary.")
-        return f"## {city} Itinerary ({days} days)", [{"Morning":osm_places[:1], "Afternoon":osm_places[1:2], "Evening":osm_places[2:3]}]
+        return f"## {city} Itinerary ({days} days)", [
+            {"Morning": osm_places[:1], "Afternoon": osm_places[1:2], "Evening": osm_places[2:3]}
+        ]
 
     return f"## {city} Itinerary ({days} days)", data.get("days", [])
 
