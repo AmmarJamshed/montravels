@@ -26,7 +26,16 @@ def apply_theme():
         h1 { color: #FFCC00; text-shadow: 2px 2px 0px #3B4CCA; }
         h2, h3 { color: #3B4CCA; }
 
-        section[data-testid="stSidebar"] { background-color: #3B4CCA; color: white; }
+        section[data-testid="stSidebar"] input,
+        section[data-testid="stSidebar"] textarea,
+        section[data-testid="stSidebar"] select,
+        section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] div,
+        section[data-testid="stSidebar"] .stNumberInput input,
+        section[data-testid="stSidebar"] .stDateInput input {
+        color: #000000 !important;          /* make text always black */
+        background-color: #eef2ff !important;
+        border-radius: 10px !important;
+}
         section[data-testid="stSidebar"] * { color: white !important; }
 
         div.stButton > button {
