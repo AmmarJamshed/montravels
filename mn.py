@@ -240,16 +240,16 @@ if show_debug and st.button("🧪 Test Groq"):
 if go:
     if not city:
         st.error("Enter a city."); st.stop()
-    with st.spinner("Building your plan…"):
-        geo = geocode_city(city)
-        if not geo:
-            st.error("Could not find that destination.")
-            st.stop()
+        with st.spinner("Building your plan…"):
+            geo = geocode_city(city)
+            if not geo:
+                st.error("Could not find that destination.")
+                st.stop()
 
-        header, days_plan = generate_itinerary_groq(
-            city=city, area=area, start=start_date, end=end_date,
-            lat=geo["lat"], lon=geo["lon"],
-            interests=interests, amount=budget
+            header, days_plan = generate_itinerary_groq(
+                city=city, area=area, start=start_date, end=end_date,
+                lat=geo["lat"], lon=geo["lon"],
+                interests=interests, amount=budget
         )
 
 st.subheader("🗓️ Itinerary")
