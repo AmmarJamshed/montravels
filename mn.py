@@ -90,46 +90,57 @@ def get_dest_id(city, area=""):
     return None
 
 
-def fetch_hotels(city, area, checkin, checkout, adults=2, limit=5):
-    """
-    Fetch hotels by city/area from Booking.com API
-    """
-    dest_id = get_dest_id(city, area)
-    if not dest_id:
-        return [{"name": "No hotels found", "link": ""}]
+RAPID_API_KEY = st.secrets["RAPIDAPI_KEY"]
 
-    url = "https://booking-com.p.rapidapi.com/v1/hotels/search"
+def fetch_hotels(city, area, checkin, checkout, adults):
     headers = {
-        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Key": RAPID_API_KEY,
         "X-RapidAPI-Host": "booking-com.p.rapidapi.com"
     }
+
+    # Step 1: Get destination ID
+    query = f"{city}, {area}" if area else city
+    loc_url = "https://booking-com.p.rapidapi.com/v1/hotels/locations"
+    loc_params = {"name": query, "locale": "en-us"}
+    loc_resp = requests.get(loc_url, headers=headers, params=loc_params)
+    if not loc_resp.ok:
+        return []
+    locations = loc_resp.json()
+    if not locations:
+        return []
+
+    dest_id = locations[0].get("dest_id")
+
+    # Step 2: Search hotels
+    search_url = "https://booking-com.p.rapidapi.com/v1/hotels/search"
     params = {
-        "checkout_date": checkout,
         "checkin_date": checkin,
-        "adults_number": adults,
-        "order_by": "popularity",
-        "dest_type": "city",
-        "units": "metric",
-        "room_number": "1",
-        "locale": "en-us",
+        "checkout_date": checkout,
         "dest_id": dest_id,
+        "dest_type": "city",
+        "adults_number": adults,
+        "order_by": "price",
+        "locale": "en-us",
+        "units": "metric",
+        "room_number": 1,
         "filter_by_currency": "USD"
     }
 
-    resp = requests.get(url, headers=headers, params=params)
-    if resp.status_code != 200:
-        return [{"name": "Hotel search unavailable", "link": ""}]
+    resp = requests.get(search_url, headers=headers, params=params)
+    if not resp.ok:
+        return []
+    results = resp.json().get("result", [])
 
-    data = resp.json()
     hotels = []
-    for h in data.get("result", [])[:limit]:
+    for r in results[:5]:  # show top 5
         hotels.append({
-            "name": h.get("hotel_name", "Unnamed Hotel"),
-            "price": h.get("min_total_price", "N/A"),
-            "rating": h.get("review_score", "N/A"),
-            "link": h.get("url", "https://booking.com")
+            "name": r.get("hotel_name"),
+            "price": r.get("price_breakdown", {}).get("all_inclusive_price"),
+            "rating": r.get("review_score"),
+            "link": f"https://www.booking.com/hotel/{r.get('hotel_id_encrypted')}.html"
         })
     return hotels
+
 
 # ================================
 # Function to generate itinerary
@@ -197,21 +208,22 @@ if go:
 
     # --- RIGHT: Hotels + Agents ---
     with col2:
-        st.subheader("🏨 Suggested Hotels & Lodges")
-        checkin = start_date.strftime("%Y-%m-%d")
-        checkout = end_date.strftime("%Y-%m-%d")
-        hotels = fetch_hotels(city, area, checkin, checkout, adults)
-        
-        for h in hotels:
-            if h["link"]:
-                st.markdown(f"""
-                **[{h['name']}]({h['link']})**  
-                💵 Price: {h['price']} USD  
-                ⭐ Rating: {h['rating']}
-                """)
+    st.subheader("🏨 Suggested Hotels & Lodges")
+    checkin = start_date.strftime("%Y-%m-%d")
+    checkout = end_date.strftime("%Y-%m-%d")
+    hotels = fetch_hotels(city, area, checkin, checkout, adults)
 
-            else:
-                st.write(h["name"])
+    if not hotels:
+        st.caption("No hotels found.")
+    else:
+        for h in hotels:
+            st.markdown(f"""
+**[{h['name']}]({h['link']})**  
+💵 Price: {h['price']} USD  
+⭐ Rating: {h['rating']}
+""")
+    else:
+        st.write(h["name"])
 
         st.subheader("✈️ Travel Agents")
         agents = [
@@ -227,5 +239,5 @@ if go:
             </div>
             """, unsafe_allow_html=True)
 
-else:
-    st.info("Enter details in the sidebar and click **Build Plan**.")
+    else:
+st.info("Enter details in the sidebar and click **Build Plan**.")
