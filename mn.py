@@ -220,9 +220,7 @@ if go:
             st.markdown(f"""
 **[{h['name']}]({h['link']})**  
 💵 Price: {h['price']} USD  
-⭐ Rating: {h['rating']}
-""")
-    
+⭐ Rating: {h['rating']} """)
     else:
         st.write(h["name"])
 
