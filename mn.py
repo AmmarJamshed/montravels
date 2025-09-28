@@ -205,7 +205,7 @@ if go:
         for h in hotels:
             if h["link"]:
                 st.markdown(
-                    f"**[{h['name']}]({h['link']})**  
+                    f"**[{h['name']}]({h['link']})**
                     💵 Price: {h['price']} USD  
                     ⭐ Rating: {h['rating']}"
                 )
