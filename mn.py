@@ -199,7 +199,7 @@ if go:
         itinerary = generate_itinerary(city, area, start_date, end_date, interests, budget, adults)
 
     # Two-column layout
-    col1, col2 = st.columns([2,1])
+    col1, col2 = st.columns([2, 1])
 
     # --- LEFT: Itinerary ---
     with col1:
@@ -207,36 +207,36 @@ if go:
         st.write(itinerary)
 
     # --- RIGHT: Hotels + Agents ---
-with col2:
-    st.subheader("🏨 Suggested Hotels & Lodges")
-    checkin = start_date.strftime("%Y-%m-%d")
-    checkout = end_date.strftime("%Y-%m-%d")
-    hotels = fetch_hotels(city, area, checkin, checkout, adults)
+    with col2:
+        st.subheader("🏨 Suggested Hotels & Lodges")
+        checkin = start_date.strftime("%Y-%m-%d")
+        checkout = end_date.strftime("%Y-%m-%d")
+        hotels = fetch_hotels(city, area, checkin, checkout, adults)
 
-    if not hotels:
-        st.caption("No hotels found.")
-    else:
-        for h in hotels:
-            if h["link"]:
-                st.markdown(f"""
+        if not hotels:
+            st.caption("No hotels found.")
+        else:
+            for h in hotels:
+                if h["link"]:
+                    st.markdown(f"""
 **[{h['name']}]({h['link']})**  
 💵 Price: {h['price']} USD  
 ⭐ Rating: {h['rating']}
 """)
-            else:
-                st.write(h["name"])
+                else:
+                    st.write(h["name"])
 
-    # Travel Agents block
-    st.subheader("✈️ Travel Agents")
-    agents = [
-        {"name": "GlobeTrek Tours", "desc": "Cultural & family packages", "email": "info@globetrek.com"},
-        {"name": "SkyHigh Travels", "desc": "Custom itineraries & visa support", "email": "bookings@skyhigh.com"}
-    ]
-    for a in agents:
-        st.markdown(f"""
-        <div class="agent-card">
-            <h4>{a['name']}</h4>
-            <p>{a['desc']}</p>
-            <p><a href="mailto:{a['email']}?subject=MonTravels {city} Trip">📧 Contact</a></p>
-        </div>
-        """, unsafe_allow_html=True)
+        # Travel Agents block
+        st.subheader("✈️ Travel Agents")
+        agents = [
+            {"name": "GlobeTrek Tours", "desc": "Cultural & family packages", "email": "info@globetrek.com"},
+            {"name": "SkyHigh Travels", "desc": "Custom itineraries & visa support", "email": "bookings@skyhigh.com"}
+        ]
+        for a in agents:
+            st.markdown(f"""
+            <div class="agent-card">
+                <h4>{a['name']}</h4>
+                <p>{a['desc']}</p>
+                <p><a href="mailto:{a['email']}?subject=MonTravels {city} Trip">📧 Contact</a></p>
+            </div>
+            """, unsafe_allow_html=True)
