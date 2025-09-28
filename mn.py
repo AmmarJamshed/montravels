@@ -222,6 +222,7 @@ if go:
 💵 Price: {h['price']} USD  
 ⭐ Rating: {h['rating']}
 """)
+    
     else:
         st.write(h["name"])
 
