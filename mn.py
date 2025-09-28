@@ -1,7 +1,6 @@
 import os
 from datetime import date, timedelta
 import requests
-from bs4 import BeautifulSoup
 import streamlit as st
 from langchain_openai import ChatOpenAI
 
@@ -47,6 +46,11 @@ st.markdown("""
 st.title("🧭 MonTravels – Travel with Wisdom")
 
 # ================================
+# Keys
+# ================================
+RAPIDAPI_KEY = st.secrets["RAPIDAPI_KEY"]
+
+# ================================
 # Initialize Groq (via LangChain)
 # ================================
 llm = ChatOpenAI(
@@ -58,39 +62,49 @@ llm = ChatOpenAI(
 )
 
 # ================================
-# Hotel Scraper (TripAdvisor)
+# Hotels.com API
 # ================================
-def scrape_hotels(city, area=None):
-    try:
-        location = f"{city} {area}" if area else city
-        query = location.replace(" ", "+")
-        url = f"https://www.tripadvisor.com/Search?q={query}+hotels"
+def fetch_hotels(city, checkin, checkout, adults):
+    url = "https://hotels-com-provider.p.rapidapi.com/v2/hotels/search"
+    headers = {
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "hotels-com-provider.p.rapidapi.com"
+    }
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/119.0 Safari/537.36"
-        }
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
+    # Note: Hotels.com API requires region_id.
+    # For demo, Karachi region_id=2621. You can add mapping for other cities.
+    region_map = {
+        "Karachi": "2621",
+        "Lahore": "2608",
+        "Islamabad": "2609"
+    }
+    region_id = region_map.get(city, "2621")
 
-        hotels = []
-        results = soup.select("div.result-title")
+    params = {
+        "region_id": region_id,
+        "checkin_date": checkin,
+        "checkout_date": checkout,
+        "adults_number": adults,
+        "sort_order": "PRICE",
+        "currency": "USD",
+        "locale": "en_US",
+        "page_number": 1
+    }
 
-        for item in results[:5]:  # limit to top 5
-            name = item.get_text(strip=True)
-            link = "https://www.tripadvisor.com" + item.get("href", "#")
-            hotels.append({
-                "name": name,
-                "link": link,
-                "price": "N/A",
-                "rating": "N/A"
-            })
-
-        return hotels
-    except Exception as e:
-        print("Scraping error:", e)
+    response = requests.get(url, headers=headers, params=params)
+    if not response.ok:
         return []
+
+    data = response.json()
+    hotels = []
+    for item in data.get("properties", [])[:5]:  # top 5
+        hotels.append({
+            "name": item.get("name"),
+            "price": item.get("price", {}).get("lead", {}).get("formatted"),
+            "rating": item.get("reviews", {}).get("score"),
+            "link": f"https://www.hotels.com/ho{item.get('id')}"
+        })
+    return hotels
 
 # ================================
 # Function to generate itinerary
@@ -159,17 +173,22 @@ if go:
     # --- RIGHT: Hotels + Agents ---
     with col2:
         st.subheader("🏨 Suggested Hotels & Lodges")
-        hotels = scrape_hotels(city, area)
+        checkin = start_date.strftime("%Y-%m-%d")
+        checkout = end_date.strftime("%Y-%m-%d")
+        hotels = fetch_hotels(city, checkin, checkout, adults)
 
         if not hotels:
-            st.caption("⚠️ No hotels found. Try changing location or dates.")
+            st.caption("No hotels found.")
         else:
             for h in hotels:
-                st.markdown(f"""
+                if h["link"]:
+                    st.markdown(f"""
 **[{h['name']}]({h['link']})**  
 💵 Price: {h['price']}  
 ⭐ Rating: {h['rating']}
 """)
+                else:
+                    st.write(h["name"])
 
         # Travel Agents block
         st.subheader("✈️ Travel Agents")
