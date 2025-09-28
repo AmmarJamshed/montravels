@@ -58,7 +58,7 @@ llm = ChatOpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     openai_api_base="https://api.groq.com/openai/v1",
     temperature=0.4,
-    max_tokens=1200,
+    max_tokens=2800,
 )
 
 # ================================
@@ -129,13 +129,17 @@ def generate_itinerary(city, area, start, end, interests, budget, adults):
     You are an expert travel planner.
 
     Create a detailed {days}-day travel itinerary for {city}, {area or ''}.
-    MUST include exactly {days} full days (Day 1, Day 2, etc).
+    It MUST include exactly {days} full days, clearly labeled as:
+    Day 1, Day 2, ..., Day {days}.
     
     For each day:
     - Morning, Afternoon, and Evening activities
     - Meals with budget-friendly suggestions
     - Practical tips
     - Daily notes
+
+    Make sure the plan is COMPLETE and does not stop mid-way.
+    If you run out of space, summarize but cover all {days} days.
     
     Focus on interests: {', '.join(interests)}.
     Budget: ${budget} per day for {adults} adults.
