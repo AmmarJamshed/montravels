@@ -208,10 +208,10 @@ if go:
 
     # --- RIGHT: Hotels + Agents ---
     with col2:
-    st.subheader("🏨 Suggested Hotels & Lodges")
-    checkin = start_date.strftime("%Y-%m-%d")
-    checkout = end_date.strftime("%Y-%m-%d")
-    hotels = fetch_hotels(city, area, checkin, checkout, adults)
+        st.subheader("🏨 Suggested Hotels & Lodges")
+        checkin = start_date.strftime("%Y-%m-%d")
+        checkout = end_date.strftime("%Y-%m-%d")
+        hotels = fetch_hotels(city, area, checkin, checkout, adults)
 
     if not hotels:
         st.caption("No hotels found.")
