@@ -207,36 +207,36 @@ if go:
         st.write(itinerary)
 
     # --- RIGHT: Hotels + Agents ---
-    with col2:
-        st.subheader("🏨 Suggested Hotels & Lodges")
-        checkin = start_date.strftime("%Y-%m-%d")
-        checkout = end_date.strftime("%Y-%m-%d")
-        hotels = fetch_hotels(city, area, checkin, checkout, adults)
+with col2:
+    st.subheader("🏨 Suggested Hotels & Lodges")
+    checkin = start_date.strftime("%Y-%m-%d")
+    checkout = end_date.strftime("%Y-%m-%d")
+    hotels = fetch_hotels(city, area, checkin, checkout, adults)
 
     if not hotels:
         st.caption("No hotels found.")
     else:
         for h in hotels:
-            st.markdown(f"""
+            if h["link"]:
+                st.markdown(f"""
 **[{h['name']}]({h['link']})**  
 💵 Price: {h['price']} USD  
-⭐ Rating: {h['rating']} """)
-    else:
-        st.write(h["name"])
+⭐ Rating: {h['rating']}
+""")
+            else:
+                st.write(h["name"])
 
-        st.subheader("✈️ Travel Agents")
-        agents = [
-            {"name": "GlobeTrek Tours", "desc": "Cultural & family packages", "email": "info@globetrek.com"},
-            {"name": "SkyHigh Travels", "desc": "Custom itineraries & visa support", "email": "bookings@skyhigh.com"}
-        ]
-        for a in agents:
-            st.markdown(f"""
-            <div class="agent-card">
-                <h4>{a['name']}</h4>
-                <p>{a['desc']}</p>
-                <p><a href="mailto:{a['email']}?subject=MonTravels {city} Trip">📧 Contact</a></p>
-            </div>
-            """, unsafe_allow_html=True)
-
-    else:
-st.info("Enter details in the sidebar and click **Build Plan**.")
+    # Travel Agents block
+    st.subheader("✈️ Travel Agents")
+    agents = [
+        {"name": "GlobeTrek Tours", "desc": "Cultural & family packages", "email": "info@globetrek.com"},
+        {"name": "SkyHigh Travels", "desc": "Custom itineraries & visa support", "email": "bookings@skyhigh.com"}
+    ]
+    for a in agents:
+        st.markdown(f"""
+        <div class="agent-card">
+            <h4>{a['name']}</h4>
+            <p>{a['desc']}</p>
+            <p><a href="mailto:{a['email']}?subject=MonTravels {city} Trip">📧 Contact</a></p>
+        </div>
+        """, unsafe_allow_html=True)
