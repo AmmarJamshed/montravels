@@ -201,9 +201,16 @@ if go:
         checkin = start_date.strftime("%Y-%m-%d")
         checkout = end_date.strftime("%Y-%m-%d")
         hotels = fetch_hotels(city, area, checkin, checkout, adults)
-
+        
         for h in hotels:
-            st.markdown(f"🔗 [{h['name']}]({h['link']})")
+            if h["link"]:
+                st.markdown(
+                    f"**[{h['name']}]({h['link']})**  
+                    💵 Price: {h['price']} USD  
+                    ⭐ Rating: {h['rating']}"
+                )
+            else:
+                st.write(h["name"])
 
         st.subheader("✈️ Travel Agents")
         agents = [
