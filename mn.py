@@ -75,12 +75,20 @@ def get_dest_id(city, area=""):
     }
     query = f"{city} {area}".strip()
     resp = requests.get(url, headers=headers, params={"name": query, "locale": "en-us"})
+    
     if resp.status_code != 200:
         return None
+    
     data = resp.json()
-    if len(data) > 0:
+    # Prefer city-type destinations
+    for d in data:
+        if d.get("dest_type") == "city":
+            return d.get("dest_id")
+    # fallback: take first available
+    if data:
         return data[0].get("dest_id")
     return None
+
 
 def fetch_hotels(city, area, checkin, checkout, adults=2, limit=5):
     """
@@ -107,6 +115,7 @@ def fetch_hotels(city, area, checkin, checkout, adults=2, limit=5):
         "dest_id": dest_id,
         "filter_by_currency": "USD"
     }
+
     resp = requests.get(url, headers=headers, params=params)
     if resp.status_code != 200:
         return [{"name": "Hotel search unavailable", "link": ""}]
@@ -116,6 +125,8 @@ def fetch_hotels(city, area, checkin, checkout, adults=2, limit=5):
     for h in data.get("result", [])[:limit]:
         hotels.append({
             "name": h.get("hotel_name", "Unnamed Hotel"),
+            "price": h.get("min_total_price", "N/A"),
+            "rating": h.get("review_score", "N/A"),
             "link": h.get("url", "https://booking.com")
         })
     return hotels
