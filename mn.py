@@ -48,7 +48,7 @@ st.title("🧭 MonTravels – Travel with Wisdom")
 # ================================
 # Keys
 # ================================
-RAPIDAPI_KEY = st.secrets["RAPIDAPI_KEY"]
+GOOGLE_MAPS_API_KEY = st.secrets["GOOGLE_MAPS_API_KEY"]
 
 # ================================
 # Initialize Groq (via LangChain)
@@ -62,49 +62,29 @@ llm = ChatOpenAI(
 )
 
 # ================================
-# Hotels.com API
+# Google Maps Places API
 # ================================
-def fetch_hotels(city, checkin, checkout, adults):
-    url = "https://hotels-com-provider.p.rapidapi.com/v2/hotels/search"
-    headers = {
-        "X-RapidAPI-Key": RAPIDAPI_KEY,
-        "X-RapidAPI-Host": "hotels-com-provider.p.rapidapi.com"
-    }
-
-    # Note: Hotels.com API requires region_id.
-    # For demo, Karachi region_id=2621. You can add mapping for other cities.
-    region_map = {
-        "Karachi": "2621",
-        "Lahore": "2608",
-        "Islamabad": "2609"
-    }
-    region_id = region_map.get(city, "2621")
-
+def fetch_google_places(city, place_type="lodging"):
+    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     params = {
-        "region_id": region_id,
-        "checkin_date": checkin,
-        "checkout_date": checkout,
-        "adults_number": adults,
-        "sort_order": "PRICE",
-        "currency": "USD",
-        "locale": "en_US",
-        "page_number": 1
+        "query": f"{place_type} in {city}",
+        "key": GOOGLE_MAPS_API_KEY
     }
-
-    response = requests.get(url, headers=headers, params=params)
+    response = requests.get(url, params=params)
     if not response.ok:
         return []
 
     data = response.json()
-    hotels = []
-    for item in data.get("properties", [])[:5]:  # top 5
-        hotels.append({
+    places = []
+    for item in data.get("results", [])[:5]:  # Top 5 results
+        maps_url = f"https://www.google.com/maps/place/?q=place_id:{item['place_id']}"
+        places.append({
             "name": item.get("name"),
-            "price": item.get("price", {}).get("lead", {}).get("formatted"),
-            "rating": item.get("reviews", {}).get("score"),
-            "link": f"https://www.hotels.com/ho{item.get('id')}"
+            "address": item.get("formatted_address"),
+            "rating": item.get("rating"),
+            "link": maps_url
         })
-    return hotels
+    return places
 
 # ================================
 # Function to generate itinerary
@@ -149,6 +129,10 @@ with st.sidebar:
         ["food","history","museums","nature","nightlife"],
         default=["food","history"]
     )
+    lodging_choice = st.selectbox(
+        "Lodging Type",
+        ["All", "Hotels", "Residences", "Motels"]
+    )
     go = st.button("✨ Build Plan")
 
 # ================================
@@ -170,25 +154,48 @@ if go:
         st.subheader("🗓️ Your Itinerary")
         st.write(itinerary)
 
-    # --- RIGHT: Hotels + Agents ---
+    # --- RIGHT: Lodging Options ---
     with col2:
-        st.subheader("🏨 Suggested Hotels & Lodges")
-        checkin = start_date.strftime("%Y-%m-%d")
-        checkout = end_date.strftime("%Y-%m-%d")
-        hotels = fetch_hotels(city, checkin, checkout, adults)
+        st.subheader("🏨 Lodging Suggestions")
 
-        if not hotels:
-            st.caption("No hotels found.")
-        else:
-            for h in hotels:
-                if h["link"]:
+        if lodging_choice in ["All", "Hotels"]:
+            st.markdown("### 🏨 Hotels")
+            hotels = fetch_google_places(city, "hotel")
+            if not hotels:
+                st.caption("No hotels found.")
+            else:
+                for h in hotels:
                     st.markdown(f"""
 **[{h['name']}]({h['link']})**  
-💵 Price: {h['price']}  
-⭐ Rating: {h['rating']}
+📍 {h['address']}  
+⭐ Rating: {h.get('rating', 'N/A')}
 """)
-                else:
-                    st.write(h["name"])
+
+        if lodging_choice in ["All", "Residences"]:
+            st.markdown("### 🏡 Residences & Apartments")
+            residences = fetch_google_places(city, "residence")
+            if not residences:
+                st.caption("No residences found.")
+            else:
+                for r in residences:
+                    st.markdown(f"""
+**[{r['name']}]({r['link']})**  
+📍 {r['address']}  
+⭐ Rating: {r.get('rating', 'N/A')}
+""")
+
+        if lodging_choice in ["All", "Motels"]:
+            st.markdown("### 🛏️ Motels")
+            motels = fetch_google_places(city, "motel")
+            if not motels:
+                st.caption("No motels found.")
+            else:
+                for m in motels:
+                    st.markdown(f"""
+**[{m['name']}]({m['link']})**  
+📍 {m['address']}  
+⭐ Rating: {m.get('rating', 'N/A')}
+""")
 
         # Travel Agents block
         st.subheader("✈️ Travel Agents")
