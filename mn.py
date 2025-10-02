@@ -46,11 +46,6 @@ st.markdown("""
 st.title("🧭 MonTravels – Travel with Wisdom")
 
 # ================================
-# Keys
-# ================================
-GOOGLE_MAPS_API_KEY = st.secrets["GOOGLE_MAPS_API_KEY"]
-
-# ================================
 # Initialize Groq (via LangChain)
 # ================================
 llm = ChatOpenAI(
@@ -62,26 +57,54 @@ llm = ChatOpenAI(
 )
 
 # ================================
-# Google Maps Places API
+# OSM Helpers
 # ================================
-def fetch_google_places(city, place_type="lodging"):
-    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+def geocode_city(city: str):
+    """Get lat/lng of a city from OSM Nominatim"""
+    url = "https://nominatim.openstreetmap.org/search"
     params = {
-        "query": f"{place_type} in {city}",
-        "key": GOOGLE_MAPS_API_KEY
+        "q": city,
+        "format": "json",
+        "limit": 1,
+        "accept-language": "en"
     }
-    response = requests.get(url, params=params)
-    if not response.ok:
+    r = requests.get(url, params=params, headers={"User-Agent": "montravels-app"})
+    data = r.json()
+    if not data:
+        return None, None
+    return float(data[0]["lat"]), float(data[0]["lon"])
+
+def fetch_osm_places(city: str, place_type="hotel", limit=5):
+    """Find hotels, residences, or motels in a city using Overpass API"""
+    lat, lon = geocode_city(city)
+    if not lat or not lon:
         return []
 
-    data = response.json()
+    radius = 5000  # 5 km search radius
+    query = f"""
+    [out:json][timeout:25];
+    (
+      node(around:{radius},{lat},{lon})[tourism={place_type}];
+      way(around:{radius},{lat},{lon})[tourism={place_type}];
+      relation(around:{radius},{lat},{lon})[tourism={place_type}];
+    );
+    out center {limit};
+    """
+    resp = requests.post("https://overpass-api.de/api/interpreter", data={"data": query}, timeout=30)
+    if not resp.ok:
+        return []
+
+    data = resp.json()
     places = []
-    for item in data.get("results", [])[:5]:  # Top 5 results
-        maps_url = f"https://www.google.com/maps/place/?q=place_id:{item['place_id']}"
+    for el in data.get("elements", [])[:limit]:
+        tags = el.get("tags", {})
+        name = tags.get("name", f"Unnamed {place_type.title()}")
+        addr = tags.get("addr:full") or tags.get("addr:street") or ""
+        maps_url = f"https://www.openstreetmap.org/{el['type']}/{el['id']}"
         places.append({
-            "name": item.get("name"),
-            "address": item.get("formatted_address"),
-            "rating": item.get("rating"),
+            "name": name,
+            "address": addr,
+            "rating": tags.get("stars", "N/A"),
             "link": maps_url
         })
     return places
@@ -104,9 +127,6 @@ def generate_itinerary(city, area, start, end, interests, budget, adults):
     - Practical tips
     - Daily notes
 
-    Make sure the plan is COMPLETE and does not stop mid-way.
-    If you run out of space, summarize but cover all {days} days.
-    
     Focus on interests: {', '.join(interests)}.
     Budget: ${budget} per day for {adults} adults.
     """
@@ -160,7 +180,7 @@ if go:
 
         if lodging_choice in ["All", "Hotels"]:
             st.markdown("### 🏨 Hotels")
-            hotels = fetch_google_places(city, "hotel")
+            hotels = fetch_osm_places(city, "hotel")
             if not hotels:
                 st.caption("No hotels found.")
             else:
@@ -173,7 +193,7 @@ if go:
 
         if lodging_choice in ["All", "Residences"]:
             st.markdown("### 🏡 Residences & Apartments")
-            residences = fetch_google_places(city, "residence")
+            residences = fetch_osm_places(city, "guest_house")
             if not residences:
                 st.caption("No residences found.")
             else:
@@ -186,7 +206,7 @@ if go:
 
         if lodging_choice in ["All", "Motels"]:
             st.markdown("### 🛏️ Motels")
-            motels = fetch_google_places(city, "motel")
+            motels = fetch_osm_places(city, "motel")
             if not motels:
                 st.caption("No motels found.")
             else:
