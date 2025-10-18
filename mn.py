@@ -3,17 +3,19 @@ import streamlit as st
 from supabase import create_client
 from dotenv import load_dotenv
 
-# Load environment variables
+# ================================
+# 🌍 ENV SETUP
+# ================================
 load_dotenv()
 SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # use service key for admin ops
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-st.set_page_config(page_title="MonTravels", page_icon="🧭", layout="wide")
-st.title("🧭 MonTravels – Explore. Connect. Discover.")
+st.set_page_config(page_title="MonTravels – Explore the World", page_icon="🧭", layout="wide")
+st.title("🧭 MonTravels – Explore, Connect & Discover")
 
 # ================================
-# 🔑 LOGIN / SIGNUP
+# 🔐 LOGIN / SIGNUP
 # ================================
 st.sidebar.header("Login / Sign Up")
 mode = st.sidebar.radio("", ["Login", "Sign Up"])
@@ -36,7 +38,7 @@ if st.sidebar.button(mode):
                     "bio": "",
                     "country": ""
                 }).execute()
-                st.sidebar.success("✅ Account created. Please login.")
+                st.sidebar.success("✅ Account created. Please log in.")
 
         elif mode == "Login":
             if not profile.data:
@@ -45,6 +47,7 @@ if st.sidebar.button(mode):
                 st.session_state["user"] = profile.data[0]
                 st.sidebar.success("✅ Logged in!")
 
+# Stop app if not logged in
 if "user" not in st.session_state:
     st.stop()
 
@@ -53,10 +56,10 @@ st.success(f"Welcome back, {user.get('email')} 👋")
 
 st.markdown("""
 ### 🌍 Welcome to MonTravels  
-Use the left sidebar to navigate:
-- ✈️ **Trip Planner** – Build AI-powered itineraries  
-- 🧑‍🤝‍🧑 **Community** – Read and post travel reviews  
-- 🤝 **Friends** – Connect, chat, and plan together  
-- 🏠 **Dashboard** – See trends, friend activity, and trips  
-- 🧠 **Trip Discovery AI** – Personalized travel recommendations
+Use the sidebar to navigate through:
+- ✈️ **Trip Planner** – Plan AI-powered itineraries  
+- 🧑‍🤝‍🧑 **Community** – Share & explore travel reviews  
+- 🤝 **Friends** – Build your travel circle & chat  
+- 🏠 **Dashboard** – See trends & friend activities  
+- 🧠 **Trip Discovery AI** – Get personalized destination ideas
 """)
