@@ -66,8 +66,10 @@ user_email = st.session_state.user.email
 
 # Get or create profile
 profile = supabase.table("users").select("*").eq("email", user_email).execute()
-if not profile.data:
+if not profile.data or len(profile.data) == 0:
     supabase.table("users").insert({"email": user_email}).execute()
+else:
+    profile = supabase.table("users").select("*").eq("email", user_email).execute()
     profile = supabase.table("users").select("*").eq("email", user_email).execute()
 current_user = profile.data[0]
 current_user_id = current_user["id"]
