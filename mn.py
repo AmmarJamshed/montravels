@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import date, timedelta, datetime
 import requests
 import streamlit as st
@@ -6,7 +7,7 @@ from bs4 import BeautifulSoup
 from langchain_openai import ChatOpenAI
 
 # ================================
-# PAGE CONFIG & THEME
+# PAGE CONFIG & STYLING
 # ================================
 st.set_page_config(page_title="MonTravels – Smart Travel Planner", page_icon="🧭", layout="wide")
 
@@ -198,25 +199,48 @@ def calculate_safety_score(news_text: str, advisory_text: str):
     except:
         return 5  # fallback default
 # ================================
-# TRAVEL AGENCY SCRAPER
+# DETAILED TRAVEL AGENCY SCRAPER
 # ================================
-def scrape_travel_agencies(city: str, max_results=10):
-    """Scrape travel agencies for the destination using DuckDuckGo search."""
+def scrape_travel_agencies(city: str, max_results=8):
+    """
+    Scrape travel agencies for the destination with name, phone, and email.
+    This version visits each agency's site (slower but more detailed).
+    """
     query = f"travel agencies in {city}"
     search_url = f"https://duckduckgo.com/html/?q={query}"
     resp = requests.get(search_url, headers={"User-Agent": "Mozilla/5.0"})
     if not resp.ok:
         return []
+
     soup = BeautifulSoup(resp.text, "lxml")
-    results = []
+    agencies = []
+
     for a in soup.select("a.result__a")[:max_results]:
-        name = a.get_text(strip=True)
-        url = a.get("href")
-        results.append({"name": name, "url": url})
-    return results
+        agency_url = a.get("href")
+        agency_name = a.get_text(strip=True)
+        phone, email = "Not found", "Not found"
+
+        # Attempt to extract contact info from the page
+        try:
+            page = requests.get(agency_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+            contact_text = BeautifulSoup(page.text, "lxml").get_text(" ", strip=True)
+            phone_match = re.search(r'(\+?\d[\d\s-]{6,15})', contact_text)
+            email_match = re.search(r'[\w\.-]+@[\w\.-]+', contact_text)
+            phone = phone_match.group(0) if phone_match else "Not found"
+            email = email_match.group(0) if email_match else "Not found"
+        except:
+            pass
+
+        agencies.append({
+            "name": agency_name,
+            "phone": phone,
+            "email": email
+        })
+
+    return agencies
 
 # ================================
-# STREAMLIT SIDEBAR INPUTS
+# SIDEBAR INPUTS
 # ================================
 with st.sidebar:
     city = st.text_input("Destination*").strip()
@@ -235,7 +259,7 @@ with st.sidebar:
     go = st.button("✨ Build Plan")
 
 # ================================
-# MAIN ACTION LOGIC
+# MAIN LOGIC
 # ================================
 if go:
     if not city:
@@ -245,20 +269,19 @@ if go:
     with st.spinner("🧠 Building your personalized itinerary..."):
         itinerary = generate_itinerary(city, area, start_date, end_date, interests, budget, adults)
 
-    # ----------------------------
-    # 2-COLUMN LAYOUT
-    # ----------------------------
+    # 2-column layout
     col1, col2 = st.columns([2, 1])
 
-    # --- LEFT COLUMN: ITINERARY ---
+    # --- LEFT: Itinerary ---
     with col1:
         st.subheader("🗓️ Your Travel Itinerary")
         st.markdown(f"**📅 Travel Period:** {start_date} → {end_date}")
         st.write(itinerary)
 
-    # --- RIGHT COLUMN: Lodging ---
+    # --- RIGHT: Lodging ---
     with col2:
         st.subheader("🏨 Lodging Options")
+
         if lodging_choice in ["All", "Hotels"]:
             st.markdown("### 🏨 Hotels")
             hotels = fetch_osm_places(city, "hotel")
@@ -287,19 +310,15 @@ if go:
                     st.markdown(f"**[{m['name']}]({m['link']})**  \n📍 {m['address']}  \n⭐ Rating: {m.get('rating','N/A')}")
 
     # ================================
-    # 🛡️ SAFETY & NEWS SECTION
+    # 🛡️ SAFETY & ADVISORY SECTION
     # ================================
-    st.subheader("🛡️ Safety & Travel Insights")
-    with st.spinner("🔎 Fetching latest news and advisories..."):
-        # 1. News scraping and summary
+    st.subheader("🛡️ Safety & Travel Intelligence")
+    with st.spinner("🔎 Analyzing news and government advisories..."):
         news_articles = scrape_news(city)
         news_summary = summarize_safety_from_news(city, news_articles)
-
-        # 2. Official advisories
         advisory_summary = summarize_advisories(city)
-
-        # 3. Safety score calculation
         safety_score = calculate_safety_score(news_summary, advisory_summary)
+
         if safety_score >= 8:
             color, status = "🟢", "Safe"
         elif 5 <= safety_score < 8:
@@ -307,7 +326,6 @@ if go:
         else:
             color, status = "🔴", "Risky"
 
-    # Display results
     st.markdown(f"### 📊 Safety Score: **{safety_score}/10** {color} – *{status}*")
     st.caption(f"🕒 Last Updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
 
@@ -325,24 +343,59 @@ if go:
     st.warning(advisory_summary)
 
     # ================================
-    # ✈️ TRAVEL AGENCIES
+    # ✈️ LOCAL TRAVEL AGENCIES (DETAILED)
     # ================================
     st.subheader("🌍 Local Travel Agencies")
-    with st.spinner("🔍 Searching local agencies..."):
+    with st.spinner("🔍 Finding agencies and contact info..."):
         agencies = scrape_travel_agencies(city)
 
     if agencies:
         for ag in agencies:
-            st.markdown(f"🔗 **[{ag['name']}]({ag['url']})**")
+            # Build email link
+            email_link = (
+                f"mailto:{ag['email']}?subject=MonTravels%20Inquiry%20about%20{city}%20Trip"
+                if ag['email'] != "Not found"
+                else None
+            )
+
+            # Build WhatsApp link
+            whatsapp_link = None
+            if ag['phone'] != "Not found":
+                phone_clean = ag['phone'].replace(" ", "").replace("-", "")
+                if not phone_clean.startswith("+"):
+                    phone_clean = "+92" + phone_clean.lstrip("0")
+                whatsapp_link = f"https://wa.me/{phone_clean}"
+
+            # Display agency details
+            st.markdown(f"""
+            📍 **{ag['name']}**  
+            📞 {ag['phone']}  
+            📧 {ag['email']}  
+            """)
+
+            c1, c2 = st.columns(2)
+            with c1:
+                if email_link:
+                    st.markdown(f"[📩 Email This Agency]({email_link})", unsafe_allow_html=True)
+                else:
+                    st.caption("📩 Email not available")
+
+            with c2:
+                if whatsapp_link:
+                    st.markdown(f"[💬 WhatsApp Chat]({whatsapp_link})", unsafe_allow_html=True)
+                else:
+                    st.caption("💬 WhatsApp not available")
+
+            st.markdown("---")
     else:
-        st.caption("No travel agencies found online for this location.")
+        st.caption("No travel agency contact details found.")
 
     # ================================
-    # 📌 Tips Section
+    # 📌 Final Tips
     # ================================
     st.info("""
     💡 **Tips:**  
-    - Always verify advisory updates closer to your travel date.  
-    - Register with your local embassy if traveling to high-risk areas.  
-    - Combine both news trends and official advisories before making final decisions.
+    - Always verify advisory updates close to your travel date.  
+    - Register with your embassy if traveling to high-risk areas.  
+    - Combine news and advisories for the most accurate risk picture.
     """)
